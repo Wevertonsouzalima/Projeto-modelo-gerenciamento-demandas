@@ -1,0 +1,75 @@
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="_nome" Label="Nome da lista" Required="true" MaxLength="200" />
+        <MudNumericField @bind-Value="_limiteWip" Label="Limite WIP (opcional)" Min="1" Class="mt-3" />
+        @if (!ListaPaiId.HasValue)
+        {
+            <MudSwitch @bind-Value="_ehBacklog" Color="Color.Primary" Label="É o backlog do quadro" Class="mt-3" />
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@string.IsNullOrWhiteSpace(_nome)" OnClick="Salvar">Salvar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int QuadroId { get; set; }
+    [Parameter] public int? ListaPaiId { get; set; }
+    private string _nome = string.Empty;
+    private int? _limiteWip;
+    private bool _ehBacklog;
+
+    private async Task Salvar()
+    {
+        if (string.IsNullOrWhiteSpace(_nome)) return;
+        var ordem = (await Db.Listas.Where(l => l.QuadroId == QuadroId && l.ListaPaiId == ListaPaiId && !l.Excluido).Select(l => (int?)l.Ordem).MaxAsync() ?? 0) + 1;
+
+        // Só pode haver uma lista de backlog por quadro.
+        if (_ehBacklog)
+        {
+            var outrasBacklog = await Db.Listas.Where(l => l.QuadroId == QuadroId && l.EhBacklog && !l.Excluido).ToListAsync();
+            foreach (var outra in outrasBacklog) outra.EhBacklog = false;
+        }
+
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        var novaLista = new Lista
+        {
+            Nome = _nome.Trim(), QuadroId = QuadroId, ListaPaiId = ListaPaiId, Ordem = ordem, LimiteWip = _limiteWip,
+            EhBacklog = !ListaPaiId.HasValue && _ehBacklog,
+            CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+        };
+        Db.Listas.Add(novaLista);
+        await Db.SaveChangesAsync();
+
+        // Lista com sublistas vira agrupadora: os cartões que estavam nela passam para a primeira sublista.
+        var cartoesDoPai = ListaPaiId.HasValue
+            ? await Db.Cartoes.Where(c => c.ListaId == ListaPaiId.Value && !c.Excluido).ToListAsync()
+            : [];
+        if (cartoesDoPai.Count > 0)
+        {
+            foreach (var cartao in cartoesDoPai)
+            {
+                cartao.ListaId = novaLista.Id;
+                Db.HistoricoAtividades.Add(new HistoricoAtividade
+                {
+                    CartaoId = cartao.Id, Tipo = TipoHistoricoAtividade.CartaoMovido,
+                    ListaOrigemId = ListaPaiId, ListaDestinoId = novaLista.Id,
+                    Descricao = $"Cartão movido para {novaLista.Nome} (lista pai passou a ter sublistas).",
+                    UsuarioId = usuarioId, OcorridoEm = DateTime.UtcNow
+                });
+            }
+            await Db.SaveChangesAsync();
+            Snackbar.Add($"{cartoesDoPai.Count} cartão(ões) movido(s) para '{novaLista.Nome}'.", Severity.Info);
+        }
+        Snackbar.Add("Lista criada.", Severity.Success);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+}

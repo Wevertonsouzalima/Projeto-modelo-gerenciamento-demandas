@@ -1,0 +1,208 @@
+@inject KanbanDbContext Db
+@inject ISnackbar Snackbar
+@inject IUsuarioAtualProvider UsuarioProvider
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="_nome" Label="Nome do quadro" Required="true"
+                      MaxLength="200" Class="mb-3" Immediate="true" />
+        <MudTextField @bind-Value="_descricao" Label="Descrição (opcional)"
+                      Lines="2" MaxLength="1000" Class="mb-3" />
+        <MudTextField @bind-Value="_cor" Label="Cor (hex, ex: #1565C0)"
+                      MaxLength="20" Class="mb-3"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Palette" />
+        @if (QuadroExistente is null && _templates.Count > 0)
+        {
+            <MudSelect T="int?" @bind-Value="_templateId" ToStringFunc="@(id => _templates.FirstOrDefault(t => t.Id == id)?.Nome)" Label="Template (opcional)" Clearable="true">
+                @foreach (var template in _templates)
+                {
+                    <MudSelectItem Value="@((int?)template.Id)">@template.Nome</MudSelectItem>
+                }
+            </MudSelect>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   OnClick="Salvar" Disabled="@string.IsNullOrWhiteSpace(_nome)">
+            Salvar
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter] public Quadro? QuadroExistente { get; set; }
+
+    string _nome = string.Empty;
+    string? _descricao;
+    string _cor = "#1565C0";
+    List<TemplateQuadro> _templates = [];
+    int? _templateId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (QuadroExistente is null)
+            _templates = await Db.TemplatesQuadro.OrderBy(t => t.Nome).ToListAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (QuadroExistente is not null)
+        {
+            _nome = QuadroExistente.Nome;
+            _descricao = QuadroExistente.Descricao;
+            _cor = QuadroExistente.Cor;
+        }
+    }
+
+    async Task Salvar()
+    {
+        if (string.IsNullOrWhiteSpace(_nome)) return;
+        var uid = UsuarioProvider.ObterIdUsuarioAtual();
+
+        if (QuadroExistente is null)
+        {
+            var novo = new Quadro
+            {
+                Nome = _nome.Trim(),
+                Descricao = _descricao?.Trim(),
+                Cor = _cor,
+                TemplateQuadroId = _templateId,
+                CriadoPorId = uid,
+                CriadoEm = DateTime.UtcNow
+            };
+            Db.Quadros.Add(novo);
+            await Db.SaveChangesAsync();
+
+            var template = _templateId.HasValue ? _templates.FirstOrDefault(t => t.Id == _templateId) : null;
+            if (template is not null)
+                await AplicarTemplateAsync(novo.Id, template);
+        }
+        else
+        {
+            var existente = await Db.Quadros.FindAsync(QuadroExistente.Id);
+            if (existente is null) return;
+            existente.Nome = _nome.Trim();
+            existente.Descricao = _descricao?.Trim();
+            existente.Cor = _cor;
+            await Db.SaveChangesAsync();
+        }
+
+        Snackbar.Add("Quadro salvo.", Severity.Success);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    void Cancelar() => MudDialog.Cancel();
+
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
+
+    private async Task AplicarTemplateAsync(int quadroId, TemplateQuadro template)
+    {
+        TemplateEstrutura? estrutura;
+        try
+        {
+            estrutura = System.Text.Json.JsonSerializer.Deserialize<TemplateEstrutura>(template.EstruturaJson, JsonOpts);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            Snackbar.Add("A estrutura do template não está em JSON válido; quadro criado sem listas.", Severity.Warning);
+            return;
+        }
+        if (estrutura?.Listas is null || estrutura.Listas.Count == 0) return;
+
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        var listasPorNome = new Dictionary<string, Lista>(StringComparer.OrdinalIgnoreCase);
+        var pendentesAutomacao = new List<(Lista Lista, TemplateAutomacao Tpl)>();
+
+        async Task CriarListaAsync(TemplateLista tpl, int? paiId, int ordem)
+        {
+            var lista = new Lista
+            {
+                Nome = tpl.Nome, QuadroId = quadroId, ListaPaiId = paiId, Ordem = ordem,
+                LimiteWip = tpl.LimiteWip, EhBacklog = tpl.Backlog ?? false,
+                CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+            };
+            Db.Listas.Add(lista);
+            await Db.SaveChangesAsync();
+            listasPorNome[tpl.Nome] = lista;
+
+            if (tpl.Campos is not null)
+            {
+                var indice = 0;
+                foreach (var campoTpl in tpl.Campos)
+                {
+                    indice++;
+                    if (!Enum.TryParse<TipoCampo>(campoTpl.Tipo, true, out var tipoCampo)) tipoCampo = TipoCampo.Texto;
+                    var campo = new DefinicaoCampo
+                    {
+                        Nome = campoTpl.Nome, Tipo = tipoCampo, ListaId = lista.Id, Ordem = indice,
+                        OpcoesSelecao = campoTpl.Opcoes, Obrigatorio = campoTpl.Obrigatorio ?? false,
+                        PedirNovamenteACadaEntrada = campoTpl.PedirNovamente ?? false,
+                        CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+                    };
+                    Db.DefinicoesCampo.Add(campo);
+                }
+                await Db.SaveChangesAsync();
+            }
+
+            if (tpl.Automacoes is not null)
+                foreach (var automacaoTpl in tpl.Automacoes)
+                    pendentesAutomacao.Add((lista, automacaoTpl));
+
+            if (tpl.Sublistas is not null)
+            {
+                var indiceSub = 0;
+                foreach (var subTpl in tpl.Sublistas)
+                {
+                    indiceSub++;
+                    await CriarListaAsync(subTpl, lista.Id, indiceSub);
+                }
+            }
+        }
+
+        var indiceLista = 0;
+        foreach (var listaTpl in estrutura.Listas)
+        {
+            indiceLista++;
+            await CriarListaAsync(listaTpl, null, indiceLista);
+        }
+
+        // Automações do template: por padrão disparam quando o cartão entra na lista onde foram declaradas.
+        foreach (var (lista, automacaoTpl) in pendentesAutomacao)
+        {
+            var gatilho = Enum.TryParse<TipoGatilho>(automacaoTpl.Gatilho, true, out var g) ? g : TipoGatilho.CartaoEntrouNaLista;
+            var regra = new RegraAutomacao
+            {
+                Nome = automacaoTpl.Nome, QuadroId = quadroId, Gatilho = gatilho, ListaId = lista.Id, Ativa = true,
+                CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+            };
+            var ordem = 0;
+            foreach (var acaoTpl in automacaoTpl.Acoes ?? [])
+            {
+                if (!Enum.TryParse<TipoAcaoAutomacao>(acaoTpl.Tipo, true, out var tipoAcao)) continue;
+                var parametros = new ParametrosAcao();
+                if (acaoTpl.ListaDestino is not null && listasPorNome.TryGetValue(acaoTpl.ListaDestino, out var destino))
+                    parametros.ListaId = destino.Id;
+                parametros.CampoNome = acaoTpl.Campo;
+                parametros.Valor = acaoTpl.Valor;
+                parametros.Texto = acaoTpl.Texto;
+                regra.Acoes.Add(new AcaoAutomacao
+                {
+                    Tipo = tipoAcao, Ordem = ordem++, ParametrosJson = JsonAutomacao.Serializar(parametros),
+                    CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+                });
+            }
+            Db.RegrasAutomacao.Add(regra);
+        }
+        await Db.SaveChangesAsync();
+    }
+
+    private sealed record TemplateEstrutura(List<TemplateLista>? Listas);
+    private sealed record TemplateLista(string Nome, bool? Backlog, int? LimiteWip, List<TemplateCampo>? Campos, List<TemplateAutomacao>? Automacoes, List<TemplateLista>? Sublistas);
+    private sealed record TemplateCampo(string Nome, string Tipo, string? Opcoes, bool? Obrigatorio, bool? PedirNovamente);
+    private sealed record TemplateAutomacao(string Nome, string? Gatilho, List<TemplateAcao>? Acoes);
+    private sealed record TemplateAcao(string Tipo, string? Campo, string? Valor, string? ListaDestino, string? Texto);
+}

@@ -1,0 +1,115 @@
+@inject KanbanDbContext Db
+
+<MudDialog>
+    <DialogContent>
+        @if (_cartao is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mb-2">
+                @(Obrigatorio
+                    ? $"Para entrar em \"{Pendencias.ListaNome}\", o cartão \"{_cartao.Titulo}\" precisa das informações abaixo."
+                    : $"O cartão \"{_cartao.Titulo}\" entrou em \"{Pendencias.ListaNome}\". Preencha o que esta etapa pede.")
+            </MudText>
+
+            @if (Pendencias.FixosFaltando.HasFlag(CamposFixosCartao.Desenvolvedor))
+            {
+                <MultiSelecaoFiltro Label="Desenvolvedores *" Class="mt-3"
+                                    Opcoes="@(_usuarios.Select(u => new OpcaoSelecao(u.Id, u.Nome)).ToList())"
+                                    Selecionados="_dados.DesenvolvedorIds" SelecionadosChanged="@(ids => _dados.DesenvolvedorIds = ids.ToList())" />
+            }
+            @if (Pendencias.FixosFaltando.HasFlag(CamposFixosCartao.Prazo))
+            {
+                <MudDatePicker Label="Prazo *" @bind-Date="_dados.Prazo" Class="mt-3" />
+            }
+            @if (Pendencias.FixosFaltando.HasFlag(CamposFixosCartao.Estimativa))
+            {
+                <MudNumericField T="decimal?" Label="Estimativa (pontos) *" @bind-Value="_dados.Estimativa" Min="0" Class="mt-3" />
+            }
+            @if (Pendencias.FixosFaltando.HasFlag(CamposFixosCartao.Sistema))
+            {
+                <MudSelect T="int?" Label="Sistema *" @bind-Value="_dados.SistemaId" ToStringFunc="@(id => _sistemas.FirstOrDefault(s => s.Id == id)?.Nome)" Class="mt-3">
+                    @foreach (var sistema in _sistemas)
+                    {
+                        <MudSelectItem Value="@((int?)sistema.Id)">@sistema.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            @if (Pendencias.FixosFaltando.HasFlag(CamposFixosCartao.Solicitante))
+            {
+                <MudSelect T="int?" Label="Solicitante *" @bind-Value="_dados.SolicitanteId" ToStringFunc="@(id => _usuarios.FirstOrDefault(u => u.Id == id)?.Nome)" Class="mt-3">
+                    @foreach (var usuario in _usuarios)
+                    {
+                        <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+
+            @foreach (var campo in Pendencias.CamposParaPreencher)
+            {
+                <div class="mt-3">
+                    <CampoListaEditor Campo="campo" Valor="@_dados.ValoresCampo.GetValueOrDefault(campo.Id)"
+                                      ValorChanged="@(v => _dados.ValoresCampo[campo.Id] = v)" />
+                </div>
+            }
+
+            @if (Obrigatorio && Faltando.Count > 0)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-4">Falta: @string.Join(", ", Faltando)</MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (Obrigatorio)
+        {
+            <MudButton OnClick="@(() => MudDialog.Cancel())">Cancelar movimento</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(Faltando.Count > 0)" OnClick="Confirmar">Confirmar e mover</MudButton>
+        }
+        else
+        {
+            <MudButton OnClick="@(() => MudDialog.Cancel())">Preencher depois</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Confirmar">Salvar</MudButton>
+        }
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int CartaoId { get; set; }
+    [Parameter] public PendenciasEtapa Pendencias { get; set; } = null!;
+    [Parameter] public bool Obrigatorio { get; set; }
+
+    private Cartao? _cartao;
+    private List<Usuario> _usuarios = [];
+    private List<Sistema> _sistemas = [];
+    private readonly DadosEtapa _dados = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _cartao = await Db.Cartoes.AsNoTracking().FirstOrDefaultAsync(c => c.Id == CartaoId);
+        _usuarios = await Db.Usuarios.AsNoTracking().Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        _sistemas = await Db.Sistemas.AsNoTracking().Where(s => s.Ativo).OrderBy(s => s.Nome).ToListAsync();
+    }
+
+    private List<string> Faltando
+    {
+        get
+        {
+            var faltando = new List<string>();
+            var fixos = Pendencias.FixosFaltando;
+            if (fixos.HasFlag(CamposFixosCartao.Desenvolvedor) && _dados.DesenvolvedorIds.Count == 0) faltando.Add("Desenvolvedor");
+            if (fixos.HasFlag(CamposFixosCartao.Prazo) && !_dados.Prazo.HasValue) faltando.Add("Prazo");
+            if (fixos.HasFlag(CamposFixosCartao.Estimativa) && !_dados.Estimativa.HasValue) faltando.Add("Estimativa");
+            if (fixos.HasFlag(CamposFixosCartao.Sistema) && !_dados.SistemaId.HasValue) faltando.Add("Sistema");
+            if (fixos.HasFlag(CamposFixosCartao.Solicitante) && !_dados.SolicitanteId.HasValue) faltando.Add("Solicitante");
+            faltando.AddRange(Pendencias.ObrigatoriosVazios
+                .Where(c => string.IsNullOrWhiteSpace(_dados.ValoresCampo.GetValueOrDefault(c.Id)))
+                .Select(c => c.Nome));
+            return faltando;
+        }
+    }
+
+    private void Confirmar() => MudDialog.Close(DialogResult.Ok(_dados));
+}

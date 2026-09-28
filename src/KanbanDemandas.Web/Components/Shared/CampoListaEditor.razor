@@ -1,0 +1,44 @@
+@* Editor de um campo configurável de lista; campos automáticos aparecem somente leitura. *@
+@if (!RegrasEtapa.EhManual(Campo))
+{
+    <MudTextField T="string" Label="@Rotulo" Value="@CamposCartao.Formatar(Campo.Tipo, Valor)" ReadOnly="true"
+                  HelperText="@RegrasEtapa.DescreverAutomatico(Campo)" Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.AutoMode" />
+}
+else
+{
+    switch (Campo.Tipo)
+    {
+        case TipoCampo.AreaTexto:
+            <MudTextField T="string" Label="@Rotulo" Lines="3" Value="@Valor" ValueChanged="@(v => ValorChanged.InvokeAsync(v))" />
+            break;
+        case TipoCampo.Checkbox:
+            <MudCheckBox T="bool" Label="@Rotulo" Value="@(bool.TryParse(Valor, out var marcado) && marcado)" ValueChanged="@(v => ValorChanged.InvokeAsync(v ? "true" : "false"))" />
+            break;
+        case TipoCampo.Data:
+            <MudDatePicker Label="@Rotulo" Date="@(DateTime.TryParse(Valor, out var data) ? data : null)" DateChanged="@(v => ValorChanged.InvokeAsync(v?.ToString("yyyy-MM-dd")))" Clearable="true" />
+            break;
+        case TipoCampo.Numero:
+            <MudNumericField T="decimal?" Label="@Rotulo" Value="@(decimal.TryParse(Valor, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var numero) ? numero : null)"
+                             ValueChanged="@(v => ValorChanged.InvokeAsync(v?.ToString(System.Globalization.CultureInfo.InvariantCulture)))" />
+            break;
+        case TipoCampo.Selecao:
+            <MudSelect T="string" Label="@Rotulo" Value="@Valor" ValueChanged="@(v => ValorChanged.InvokeAsync(v))" Clearable="true">
+                @foreach (var opcao in Campo.ObterOpcoesSelecao())
+                {
+                    <MudSelectItem Value="@opcao">@opcao</MudSelectItem>
+                }
+            </MudSelect>
+            break;
+        default:
+            <MudTextField T="string" Label="@Rotulo" Value="@Valor" ValueChanged="@(v => ValorChanged.InvokeAsync(v))" />
+            break;
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public DefinicaoCampo Campo { get; set; } = null!;
+    [Parameter] public string? Valor { get; set; }
+    [Parameter] public EventCallback<string?> ValorChanged { get; set; }
+
+    private string Rotulo => Campo.Nome + (Campo.Obrigatorio && RegrasEtapa.EhManual(Campo) ? " *" : "");
+}

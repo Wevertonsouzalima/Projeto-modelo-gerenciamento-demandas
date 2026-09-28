@@ -1,0 +1,129 @@
+<div class="multisel @Class">
+    @if (!string.IsNullOrWhiteSpace(Label))
+    {
+        <label class="multisel-label @(_aberto ? "multisel-label-ativo" : "")">@Label</label>
+    }
+    <div class="multisel-ancora">
+    <div class="multisel-caixa @(_aberto ? "multisel-caixa-ativa" : "")" @onclick="FocarAsync">
+        @foreach (var opcao in Opcoes.Where(o => Selecionados.Contains(o.Id)))
+        {
+            <span class="multisel-chip" style="@(string.IsNullOrWhiteSpace(opcao.Cor) ? null : $"background:{opcao.Cor};border-color:{opcao.Cor};color:#fff")">
+                @opcao.Nome
+                <button type="button" class="multisel-chip-remover" title="Remover" @onclick="@(() => Alternar(opcao))" @onclick:stopPropagation="true">&times;</button>
+            </span>
+        }
+        <input @ref="_input" class="multisel-input" value="@_texto" placeholder="@(Selecionados.Count == 0 ? "Digite para filtrar..." : "")"
+               @oninput="AoDigitar" @onfocus="Abrir" @onblur="Fechar" @onkeydown="AoTeclar" autocomplete="off" />
+    </div>
+    <MudPopover Open="_aberto" AnchorOrigin="Origin.BottomLeft" TransformOrigin="Origin.TopLeft"
+                RelativeWidth="DropdownWidth.Relative" MaxHeight="320" Class="multisel-popover">
+        <div @onmousedown:preventDefault="true">
+            @if (Selecionados.Count > 0)
+            {
+                <div class="multisel-opcao multisel-limpar" @onclick="Limpar">Limpar</div>
+            }
+            @if (Filtradas.Count == 0)
+            {
+                <div class="multisel-vazio">Nenhum item encontrado.</div>
+            }
+            @for (var i = 0; i < Filtradas.Count; i++)
+            {
+                var opcao = Filtradas[i];
+                var indice = i;
+                var selecionado = Selecionados.Contains(opcao.Id);
+                <div class="multisel-opcao @(selecionado ? "multisel-opcao-selecionada" : "") @(indice == _destaque ? "multisel-opcao-destaque" : "")"
+                     @onclick="@(() => Alternar(opcao))" @onmouseenter="@(() => _destaque = indice)">
+                    @if (!string.IsNullOrWhiteSpace(opcao.Cor))
+                    {
+                        <span class="multisel-cor" style="@($"background:{opcao.Cor}")"></span>
+                    }
+                    <span class="flex-grow-1">@opcao.Nome</span>
+                    @if (selecionado)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Check" Size="Size.Small" />
+                    }
+                </div>
+            }
+        </div>
+    </MudPopover>
+    </div>
+    @if (Selecionados.Count > 0)
+    {
+        <div class="multisel-contador">@Selecionados.Count selecionado@(Selecionados.Count == 1 ? "" : "s")</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<OpcaoSelecao> Opcoes { get; set; } = [];
+    [Parameter] public IReadOnlyCollection<int> Selecionados { get; set; } = [];
+    [Parameter] public EventCallback<IReadOnlyCollection<int>> SelecionadosChanged { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? Class { get; set; }
+
+    private ElementReference _input;
+    private string _texto = string.Empty;
+    private bool _aberto;
+    private int _destaque = -1;
+
+    private List<OpcaoSelecao> Filtradas => string.IsNullOrWhiteSpace(_texto)
+        ? Opcoes.ToList()
+        : Opcoes.Where(o => o.Nome.Contains(_texto.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+
+    private async Task FocarAsync() => await _input.FocusAsync();
+
+    private void Abrir() => _aberto = true;
+
+    private void Fechar()
+    {
+        _aberto = false;
+        _destaque = -1;
+    }
+
+    private void AoDigitar(ChangeEventArgs e)
+    {
+        _texto = e.Value?.ToString() ?? string.Empty;
+        _aberto = true;
+        _destaque = Filtradas.Count > 0 ? 0 : -1;
+    }
+
+    private async Task Alternar(OpcaoSelecao opcao)
+    {
+        var novos = Selecionados.Contains(opcao.Id)
+            ? Selecionados.Where(id => id != opcao.Id).ToList()
+            : [.. Selecionados, opcao.Id];
+        // Ao escolher um item, o filtro digitado é descartado para a próxima busca começar do zero.
+        if (_texto.Length > 0)
+        {
+            _texto = string.Empty;
+            _destaque = -1;
+        }
+        await SelecionadosChanged.InvokeAsync(novos);
+    }
+
+    private async Task Limpar() => await SelecionadosChanged.InvokeAsync(Array.Empty<int>());
+
+    private async Task AoTeclar(KeyboardEventArgs e)
+    {
+        var filtradas = Filtradas;
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _aberto = true;
+                if (filtradas.Count > 0) _destaque = (_destaque + 1) % filtradas.Count;
+                break;
+            case "ArrowUp":
+                if (filtradas.Count > 0) _destaque = _destaque <= 0 ? filtradas.Count - 1 : _destaque - 1;
+                break;
+            case "Enter":
+                if (_destaque >= 0 && _destaque < filtradas.Count) await Alternar(filtradas[_destaque]);
+                break;
+            case "Escape":
+                Fechar();
+                break;
+            case "Backspace" when _texto.Length == 0 && Selecionados.Count > 0:
+                var ultimo = Opcoes.LastOrDefault(o => Selecionados.Contains(o.Id));
+                if (ultimo is not null) await Alternar(ultimo);
+                break;
+        }
+    }
+}

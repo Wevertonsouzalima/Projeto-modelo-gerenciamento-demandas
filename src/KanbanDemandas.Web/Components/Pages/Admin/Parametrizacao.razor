@@ -1,0 +1,358 @@
+@page "/admin/parametros"
+@rendermode InteractiveServer
+@using KanbanDemandas.Web.Configuracao
+@inject ParametrosService Parametros
+@inject CompactacaoAnexosService Compactacao
+@inject KanbanDbContext Db
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject UrlBaseAplicacao UrlBase
+
+<PageTitle>Parametrização</PageTitle>
+
+<div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-3">
+    <div>
+        <MudText Typo="Typo.h5">Parametrização</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">Ajustes aplicados na hora, sem reiniciar o sistema. Valores não alterados seguem o padrão do arquivo de configuração.</MudText>
+    </div>
+    <div class="d-flex gap-2">
+        <MudButton Variant="Variant.Outlined" Href="/admin/feriados" StartIcon="@Icons.Material.Filled.EventBusy">Feriados</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" Disabled="@(!TemAlteracoes || _salvando)" OnClick="Salvar">Salvar alterações</MudButton>
+    </div>
+</div>
+
+@if (_valores is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pt-4">
+        @foreach (var grupo in CatalogoParametros.Todos.GroupBy(p => p.Grupo))
+        {
+            <MudTabPanel Text="@grupo.Key" BadgeData="@(grupo.Count(p => _alterados.Contains(p.Chave)) is var n && n > 0 ? n : null)" BadgeColor="Color.Info">
+                <MudGrid>
+                    @foreach (var parametro in grupo)
+                    {
+                        var p = parametro;
+                        <MudItem xs="12" md="6">
+                            <MudPaper Outlined="true" Class="pa-3" Style="height:100%">
+                                <div class="d-flex align-center justify-space-between gap-2">
+                                    <MudText Typo="Typo.subtitle2">@p.Nome</MudText>
+                                    @if (_alterados.Contains(p.Chave))
+                                    {
+                                        <div class="d-flex align-center">
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">alterado</MudChip>
+                                            <MudTooltip Text="@($"Restaurar o padrão ({Exibir(p, Parametros.ValorPadrao(p.Chave))})")">
+                                                <MudIconButton Icon="@Icons.Material.Filled.SettingsBackupRestore" Size="Size.Small" OnClick="@(() => Restaurar(p))" />
+                                            </MudTooltip>
+                                        </div>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(p.Ajuda))
+                                {
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">@p.Ajuda</MudText>
+                                }
+                                @Editor(p)
+                                @if (_erros.TryGetValue(p.Chave, out var erro))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Error">@erro</MudText>
+                                }
+                            </MudPaper>
+                        </MudItem>
+                    }
+                    @if (grupo.Key == "Portal")
+                    {
+                        <MudItem xs="12">
+                            <MudPaper Outlined="true" Class="pa-3">
+                                <MudText Typo="Typo.subtitle2">Status público de cada lista</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+                                    O que o solicitante vê quando o cartão está em cada lista do quadro do portal. Deixe em branco para manter o status anterior
+                                    (movimentações internas ficam invisíveis). Ex.: Backlog → "Recebida", Em Andamento/Code Review → "Em desenvolvimento", Homologação → "Em validação", Concluído → "Concluída".
+                                </MudText>
+                                @if (ListasDoPortal.Count == 0)
+                                {
+                                    <MudAlert Severity="Severity.Info" Dense="true">Escolha e salve o quadro do portal para configurar os status.</MudAlert>
+                                }
+                                else
+                                {
+                                    <MudSimpleTable Dense="true" Bordered="true">
+                                        <thead><tr><th>Lista</th><th>Status público</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var lista in ListasQuadro.FolhasEmOrdem(ListasDoPortal))
+                                            {
+                                                var l = lista;
+                                                <tr>
+                                                    <td>@ListasQuadro.NomeCompleto(l, ListasDoPortal)</td>
+                                                    <td><MudTextField T="string" Value="@_statusPortal.GetValueOrDefault(l.Id)" ValueChanged="@(v => _statusPortal[l.Id] = v)"
+                                                                      Margin="Margin.Dense" Placeholder="(mantém o anterior)" MaxLength="100" /></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </MudSimpleTable>
+                                    <div class="d-flex justify-end mt-2">
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="SalvarStatusPortal">Salvar status</MudButton>
+                                    </div>
+                                }
+                            </MudPaper>
+                        </MudItem>
+                    }
+                    @if (grupo.Key == "Integrações")
+                    {
+                        <MudItem xs="12">
+                            <MudAlert Severity="Severity.Info" Dense="true">
+                                Endereço para cadastrar no GitHub (Payload URL): <b>@(string.IsNullOrEmpty(UrlBase.Valor) ? "(configure o Endereço do sistema na aba Geral)" : $"{UrlBase.Valor}/api/integracoes/github")</b>
+                                · Content type: application/json · Eventos: Pushes, Pull requests, Branch or tag creation. Passo a passo em docs/integracoes/github.md.
+                            </MudAlert>
+                        </MudItem>
+                    }
+                    @if (grupo.Key == "Anexos")
+                    {
+                        <MudItem xs="12">
+                            <MudPaper Outlined="true" Class="pa-3 d-flex align-center justify-space-between flex-wrap gap-3">
+                                <div>
+                                    <MudText Typo="Typo.subtitle2">Compactar anexos já existentes</MudText>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        Aplica a compactação (com as regras acima, já salvas) aos anexos enviados antes. O download continua devolvendo o arquivo original.
+                                    </MudText>
+                                    @if (_estatisticaAnexos is { } est)
+                                    {
+                                        <MudText Typo="Typo.caption" Class="d-block">
+                                            @est.Total anexo(s) · @est.Compactados compactado(s) · ocupando @Tamanho(est.Armazenado) de @Tamanho(est.Original)
+                                        </MudText>
+                                    }
+                                </div>
+                                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Compress" Disabled="_compactando" OnClick="CompactarExistentes">
+                                    @(_compactando ? "Compactando..." : "Compactar agora")
+                                </MudButton>
+                            </MudPaper>
+                        </MudItem>
+                    }
+                </MudGrid>
+            </MudTabPanel>
+        }
+    </MudTabs>
+}
+
+@code {
+    private Dictionary<string, string?>? _valores;
+    private Dictionary<string, string?> _originais = [];
+    private HashSet<string> _alterados = [];
+    private readonly Dictionary<string, string> _erros = [];
+    private List<Usuario> _usuarios = [];
+    private List<Quadro> _quadros = [];
+    private List<Lista> _listasPortal = [];
+    private int _quadroPortalCarregado = -1;
+    private readonly Dictionary<int, string?> _statusPortal = [];
+
+    // Listas do quadro escolhido (mesmo antes de salvar), para o seletor da lista de entrada e o mapa de status.
+    private List<Lista> ListasDoPortal
+    {
+        get
+        {
+            var quadroId = int.TryParse(_valores?.GetValueOrDefault("Portal:QuadroId"), out var id) ? id : 0;
+            if (quadroId != _quadroPortalCarregado)
+            {
+                _quadroPortalCarregado = quadroId;
+                _listasPortal = Db.Listas.AsNoTracking().Where(l => l.QuadroId == quadroId && !l.Excluido).ToList();
+                _statusPortal.Clear();
+                foreach (var lista in _listasPortal) _statusPortal[lista.Id] = lista.StatusPortal;
+            }
+            return _listasPortal;
+        }
+    }
+
+    private async Task SalvarStatusPortal()
+    {
+        var ids = _statusPortal.Keys.ToList();
+        var listas = await Db.Listas.Where(l => ids.Contains(l.Id)).ToListAsync();
+        foreach (var lista in listas)
+            lista.StatusPortal = string.IsNullOrWhiteSpace(_statusPortal[lista.Id]) ? null : _statusPortal[lista.Id]!.Trim();
+        await Db.SaveChangesAsync();
+        _quadroPortalCarregado = -1;
+        Snackbar.Add("Status públicos salvos.", Severity.Success);
+    }
+    private bool _salvando;
+    private readonly HashSet<string> _segredosVisiveis = [];
+    private bool _compactando;
+    private (int Total, int Compactados, long Original, long Armazenado)? _estatisticaAnexos;
+
+    private bool TemAlteracoes => _valores is not null && _valores.Any(v => (v.Value ?? "") != (_originais.GetValueOrDefault(v.Key) ?? ""));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _usuarios = await Db.Usuarios.AsNoTracking().Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        _quadros = await Db.Quadros.AsNoTracking().Where(q => !q.Excluido).OrderBy(q => q.Nome).ToListAsync();
+        await Carregar();
+    }
+
+    private async Task Carregar()
+    {
+        _valores = CatalogoParametros.Todos.ToDictionary(p => p.Chave, p => Parametros.ValorAtual(p.Chave));
+        _originais = new Dictionary<string, string?>(_valores);
+        _alterados = await Parametros.ChavesAlteradasAsync();
+        _erros.Clear();
+        var anexos = await Db.Anexos.AsNoTracking().Where(a => !a.Excluido)
+            .Select(a => new { a.Comprimido, a.TamanhoBytes, a.TamanhoArmazenadoBytes }).ToListAsync();
+        _estatisticaAnexos = (anexos.Count, anexos.Count(a => a.Comprimido), anexos.Sum(a => a.TamanhoBytes),
+            anexos.Sum(a => a.TamanhoArmazenadoBytes > 0 ? a.TamanhoArmazenadoBytes : a.TamanhoBytes));
+    }
+
+    private RenderFragment Editor(ParametroDefinicao p) => __builder =>
+    {
+        var valor = _valores![p.Chave];
+        switch (p.Tipo)
+        {
+            case TipoParametro.Booleano:
+                <MudSwitch T="bool" Value="@(bool.TryParse(valor, out var marcado) && marcado)" ValueChanged="@(v => _valores[p.Chave] = v ? "true" : "false")"
+                           Color="Color.Primary" Label="@(bool.TryParse(valor, out var m2) && m2 ? "Sim" : "Não")" />
+                break;
+            case TipoParametro.Inteiro:
+            case TipoParametro.Decimal:
+                <MudNumericField T="decimal?" Value="@(decimal.TryParse(valor, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var numero) ? numero : null)"
+                                 ValueChanged="@(v => _valores[p.Chave] = v?.ToString(System.Globalization.CultureInfo.InvariantCulture))"
+                                 Min="@p.Minimo" Max="@p.Maximo" Margin="Margin.Dense" Variant="Variant.Outlined" />
+                break;
+            case TipoParametro.Horario:
+                <MudTimePicker Time="@(TimeSpan.TryParse(valor, out var hora) ? hora : null)" TimeChanged="@(v => _valores[p.Chave] = v?.ToString(@"hh\:mm"))"
+                               Margin="Margin.Dense" Variant="Variant.Outlined" />
+                break;
+            case TipoParametro.Opcoes:
+                <MudSelect T="string" Value="@valor" ValueChanged="@(v => _valores[p.Chave] = v)" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           ToStringFunc="@(v => p.Opcoes?.FirstOrDefault(o => o.Valor == v).Rotulo ?? v)">
+                    @foreach (var (opcao, rotulo) in p.Opcoes ?? [])
+                    {
+                        <MudSelectItem Value="@opcao">@rotulo</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+            case TipoParametro.Usuario:
+                <MudSelect T="string" Value="@valor" ValueChanged="@(v => _valores[p.Chave] = v)" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           ToStringFunc="@(v => _usuarios.FirstOrDefault(u => u.Id.ToString() == v)?.Nome ?? v)">
+                    @foreach (var usuario in _usuarios)
+                    {
+                        <MudSelectItem Value="@usuario.Id.ToString()">@usuario.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+            case TipoParametro.Quadro:
+                <MudSelect T="string" Value="@valor" ValueChanged="@(v => { _valores[p.Chave] = v; _valores["Portal:ListaEntradaId"] = null; })" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           ToStringFunc="@(v => _quadros.FirstOrDefault(q => q.Id.ToString() == v)?.Nome ?? "(nenhum)")">
+                    @foreach (var quadro in _quadros)
+                    {
+                        <MudSelectItem Value="@quadro.Id.ToString()">@quadro.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+            case TipoParametro.Lista:
+                <MudSelect T="string" Value="@valor" ValueChanged="@(v => _valores[p.Chave] = v)" Margin="Margin.Dense" Variant="Variant.Outlined"
+                           ToStringFunc="@(v => ListasDoPortal.FirstOrDefault(l => l.Id.ToString() == v) is { } l ? ListasQuadro.NomeCompleto(l, ListasDoPortal) : "(nenhuma)")">
+                    @foreach (var lista in ListasQuadro.FolhasEmOrdem(ListasDoPortal))
+                    {
+                        <MudSelectItem Value="@lista.Id.ToString()">@ListasQuadro.NomeCompleto(lista, ListasDoPortal)</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+            case TipoParametro.MultiOpcoes:
+                <MudChipSet T="string" SelectionMode="SelectionMode.MultiSelection" CheckMark="true" Variant="Variant.Outlined" Color="Color.Primary"
+                            SelectedValues="@((valor ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))"
+                            SelectedValuesChanged="@(v => _valores[p.Chave] = string.Join(",", v ?? []))">
+                    @foreach (var (opcao, rotulo) in p.Opcoes ?? [])
+                    {
+                        <MudChip Value="@opcao" Text="@rotulo" />
+                    }
+                </MudChipSet>
+                break;
+            case TipoParametro.Segredo:
+                <div class="d-flex align-center gap-2">
+                    <MudTextField T="string" Value="@valor" ValueChanged="@(v => _valores[p.Chave] = v)" Margin="Margin.Dense" Variant="Variant.Outlined"
+                                  InputType="@(_segredosVisiveis.Contains(p.Chave) ? InputType.Text : InputType.Password)" Class="flex-grow-1" />
+                    <MudTooltip Text="Mostrar/ocultar">
+                        <MudIconButton Icon="@(_segredosVisiveis.Contains(p.Chave) ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)" Size="Size.Small"
+                                       OnClick="@(() => { if (!_segredosVisiveis.Remove(p.Chave)) _segredosVisiveis.Add(p.Chave); })" />
+                    </MudTooltip>
+                    <MudTooltip Text="Gerar segredo aleatório">
+                        <MudIconButton Icon="@Icons.Material.Filled.Key" Size="Size.Small" OnClick="@(() => _valores[p.Chave] = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)).ToLowerInvariant())" />
+                    </MudTooltip>
+                </div>
+                break;
+            default:
+                <MudTextField T="string" Value="@valor" ValueChanged="@(v => _valores[p.Chave] = v)" Margin="Margin.Dense" Variant="Variant.Outlined" />
+                break;
+        }
+    };
+
+    private string Exibir(ParametroDefinicao p, string? valor) => p.Tipo switch
+    {
+        TipoParametro.Booleano => bool.TryParse(valor, out var b) && b ? "Sim" : "Não",
+        TipoParametro.Opcoes => p.Opcoes?.FirstOrDefault(o => o.Valor == valor).Rotulo ?? valor ?? "vazio",
+        TipoParametro.Usuario => _usuarios.FirstOrDefault(u => u.Id.ToString() == valor)?.Nome ?? valor ?? "vazio",
+        TipoParametro.Segredo => string.IsNullOrWhiteSpace(valor) ? "vazio" : "••••••",
+        TipoParametro.Quadro => _quadros.FirstOrDefault(q => q.Id.ToString() == valor)?.Nome ?? "nenhum",
+        TipoParametro.Lista => ListasDoPortal.FirstOrDefault(l => l.Id.ToString() == valor)?.Nome ?? "nenhuma",
+        TipoParametro.MultiOpcoes => string.Join(", ", (valor ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(v => p.Opcoes?.FirstOrDefault(o => o.Valor == v.Trim()).Rotulo ?? v)),
+        _ => string.IsNullOrWhiteSpace(valor) ? "vazio" : valor
+    };
+
+    // Sem padrões relacionais (< / >) no início da linha: o editor Razor do Visual Studio os lê como tags.
+    private static string Tamanho(long bytes)
+    {
+        const long mb = 1024L * 1024;
+        if (bytes >= mb * 1024) return $"{bytes / 1024d / 1024 / 1024:0.##} GB";
+        if (bytes >= mb) return $"{bytes / 1024d / 1024:0.#} MB";
+        return $"{bytes / 1024d:0.#} KB";
+    }
+
+    private async Task Salvar()
+    {
+        _erros.Clear();
+        var alterados = _valores!.Where(v => (v.Value ?? "") != (_originais.GetValueOrDefault(v.Key) ?? "")).ToDictionary(v => v.Key, v => v.Value);
+        foreach (var (chave, valor) in alterados)
+        {
+            var erro = ParametrosService.Validar(CatalogoParametros.Buscar(chave)!, valor);
+            if (erro is not null) _erros[chave] = erro;
+        }
+        if (_erros.Count > 0)
+        {
+            Snackbar.Add("Corrija os valores destacados.", Severity.Warning);
+            return;
+        }
+        _salvando = true;
+        try
+        {
+            await Parametros.SalvarAsync(alterados);
+            Snackbar.Add($"{alterados.Count} parâmetro(s) salvo(s) e aplicado(s).", Severity.Success);
+            await Carregar();
+        }
+        finally
+        {
+            _salvando = false;
+        }
+    }
+
+    private async Task Restaurar(ParametroDefinicao p)
+    {
+        await Parametros.RestaurarAsync(p.Chave);
+        Snackbar.Add($"\"{p.Nome}\" voltou ao padrão.", Severity.Info);
+        await Carregar();
+    }
+
+    private async Task CompactarExistentes()
+    {
+        var confirmado = await Dialog.ShowMessageBox("Compactar anexos",
+            "Compactar agora os anexos existentes que se encaixam nas regras de compactação salvas? Pode levar alguns minutos.", yesText: "Compactar", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        _compactando = true;
+        try
+        {
+            var resultado = await Compactacao.CompactarExistentesAsync();
+            Snackbar.Add($"{resultado.Compactados} de {resultado.Analisados} anexo(s) compactado(s), {Tamanho(resultado.BytesEconomizados)} economizados"
+                + (resultado.Erros > 0 ? $" · {resultado.Erros} erro(s) (ver log)" : "."), resultado.Erros > 0 ? Severity.Warning : Severity.Success);
+            await Carregar();
+        }
+        finally
+        {
+            _compactando = false;
+        }
+    }
+}

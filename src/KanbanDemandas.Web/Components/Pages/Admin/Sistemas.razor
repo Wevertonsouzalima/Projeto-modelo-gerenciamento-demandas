@@ -1,0 +1,114 @@
+@page "/admin/sistemas"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject ISnackbar Snackbar
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject IConfiguration Configuracao
+
+<PageTitle>Sistemas</PageTitle>
+<MudText Typo="Typo.h5" Class="mb-4">Sistemas</MudText>
+
+<MudButton Variant="Variant.Filled" Color="Color.Primary"
+           StartIcon="@Icons.Material.Filled.Add"
+           OnClick="AbrirFormNovo" Class="mb-3">
+    Novo Sistema
+</MudButton>
+
+<MudTable Items="_sistemas" RowsPerPage="@ItensPorPagina" Hover="true" Striped="true" Dense="true">
+    <HeaderContent>
+        <MudTh>Nome</MudTh>
+        <MudTh>Ativo</MudTh>
+        <MudTh>Ações</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Nome">@context.Nome</MudTd>
+        <MudTd DataLabel="Ativo">
+            <MudChip T="string" Color="@(context.Ativo ? Color.Success : Color.Default)" Size="Size.Small">
+                @(context.Ativo ? "Ativo" : "Inativo")
+            </MudChip>
+        </MudTd>
+        <MudTd>
+            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                           OnClick="@(() => AbrirFormEdicao(context))" />
+            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                           OnClick="@(() => Excluir(context))" />
+        </MudTd>
+    </RowTemplate>
+    <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+</MudTable>
+
+@if (_formAberto)
+{
+    <MudPaper Class="pa-4 mt-4" Elevation="2">
+        <MudText Typo="Typo.h6">@(_editando?.Id > 0 ? "Editar" : "Novo") Sistema</MudText>
+        <MudTextField @bind-Value="_editando!.Nome" Label="Nome" Required="true" Class="mt-2" />
+        <MudSwitch @bind-Value="_editando.Ativo" Label="Ativo" Color="Color.Primary" Class="mt-2" />
+        <div class="d-flex gap-2 mt-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Salvar">Salvar</MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="Cancelar">Cancelar</MudButton>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    List<Sistema> _sistemas = [];
+    Sistema? _editando;
+    bool _formAberto = false;
+
+    protected override async Task OnInitializedAsync()
+        => _sistemas = await Db.Sistemas.OrderBy(s => s.Nome).ToListAsync();
+
+    void AbrirFormNovo()
+    {
+        _editando = new Sistema { Ativo = true };
+        _formAberto = true;
+    }
+
+    void AbrirFormEdicao(Sistema s)
+    {
+        _editando = new Sistema { Id = s.Id, Nome = s.Nome, Ativo = s.Ativo };
+        _formAberto = true;
+    }
+
+    async Task Salvar()
+    {
+        if (string.IsNullOrWhiteSpace(_editando?.Nome)) return;
+
+        var uid = UsuarioProvider.ObterIdUsuarioAtual();
+
+        if (_editando.Id == 0)
+        {
+            _editando.CriadoPorId = uid;
+            _editando.CriadoEm = DateTime.UtcNow;
+            Db.Sistemas.Add(_editando);
+        }
+        else
+        {
+            var existente = await Db.Sistemas.FindAsync(_editando.Id);
+            if (existente is null) return;
+            existente.Nome = _editando.Nome;
+            existente.Ativo = _editando.Ativo;
+        }
+
+        await Db.SaveChangesAsync();
+        _sistemas = await Db.Sistemas.OrderBy(s => s.Nome).ToListAsync();
+        _formAberto = false;
+        Snackbar.Add("Sistema salvo com sucesso.", Severity.Success);
+    }
+
+    async Task Excluir(Sistema s)
+    {
+        var existente = await Db.Sistemas.FindAsync(s.Id);
+        if (existente is null) return;
+        existente.Excluido = true;
+        existente.ExcluidoEm = DateTime.UtcNow;
+        existente.ExcluidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        _sistemas = await Db.Sistemas.OrderBy(s => s.Nome).ToListAsync();
+        Snackbar.Add("Sistema removido.", Severity.Info);
+    }
+
+    void Cancelar() => _formAberto = false;
+}

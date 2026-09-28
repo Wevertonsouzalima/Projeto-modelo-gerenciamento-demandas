@@ -1,0 +1,62 @@
+@inject NavigationManager Nav
+
+<MudNavMenu>
+    <MudNavLink Href="/" Match="NavLinkMatch.All"
+                Icon="@Icons.Material.Filled.Dashboard">
+        Quadros
+    </MudNavLink>
+
+    <MudNavLink Href="/sprints"
+                Icon="@Icons.Material.Filled.Loop">
+        Sprints
+    </MudNavLink>
+
+    <MudNavLink Href="/dashboard"
+                Icon="@Icons.Material.Filled.BarChart">
+        Dashboard
+    </MudNavLink>
+
+    <MudNavLink Href="/relatorios"
+                Icon="@Icons.Material.Filled.Insights">
+        Relatórios
+    </MudNavLink>
+
+    <MudNavLink Href="/notificacoes"
+                Icon="@Icons.Material.Filled.Notifications">
+        Notificações
+    </MudNavLink>
+
+    <MudDivider Class="my-2" />
+
+    <MudText Typo="Typo.overline" Class="px-4 mud-text-secondary">Administração</MudText>
+
+    <MudNavLink Href="/admin/sistemas"
+                Icon="@Icons.Material.Filled.Storage">
+        Sistemas
+    </MudNavLink>
+
+    <MudNavLink Href="/admin/usuarios"
+                Icon="@Icons.Material.Filled.Group">
+        Usuários
+    </MudNavLink>
+
+    <MudNavLink Href="/admin/templates"
+                Icon="@Icons.Material.Filled.ContentCopy">
+        Templates de Quadro
+    </MudNavLink>
+
+    <MudNavLink Href="/admin/automacoes"
+                Icon="@Icons.Material.Filled.Bolt">
+        Automações
+    </MudNavLink>
+
+    <MudNavLink Href="/admin/feriados"
+                Icon="@Icons.Material.Filled.EventBusy">
+        Feriados
+    </MudNavLink>
+
+    <MudNavLink Href="/admin/parametros"
+                Icon="@Icons.Material.Filled.Tune">
+        Parametrização
+    </MudNavLink>
+</MudNavMenu>

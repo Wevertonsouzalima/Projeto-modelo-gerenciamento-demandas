@@ -1,0 +1,237 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject IConfiguration Configuracao
+
+<PageTitle>Dashboard</PageTitle>
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h5">Dashboard de Indicadores</MudText>
+    <div class="d-flex gap-2">
+        <MudButton Href='@UrlExportacao("xlsx")' Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FileDownload">Excel</MudButton>
+        <MudButton Href='@UrlExportacao("pdf")' Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.PictureAsPdf">PDF</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="Carregar">Atualizar</MudButton>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap gap-3 mb-4">
+    <MudTextField @bind-Value="_busca" Label="Filtrar cartões" Clearable="true" />
+    <MudSelect T="int?" @bind-Value="_sistemaFiltro" ToStringFunc="@(id => _sistemas.FirstOrDefault(s => s.Id == id)?.Nome)" Label="Sistema" Clearable="true" Style="min-width:200px">
+        @foreach (var sistema in _sistemas)
+        {
+            <MudSelectItem Value="@((int?)sistema.Id)">@sistema.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    <MudSelect T="int?" @bind-Value="_desenvolvedorFiltro" ToStringFunc="@(id => _usuarios.FirstOrDefault(u => u.Id == id)?.Nome)" Label="Desenvolvedor" Clearable="true" Style="min-width:200px">
+        @foreach (var usuario in _usuarios)
+        {
+            <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    <MudSelect T="int?" @bind-Value="_solicitanteFiltro" ToStringFunc="@(id => _usuarios.FirstOrDefault(u => u.Id == id)?.Nome)" Label="Solicitante" Clearable="true" Style="min-width:200px">
+        @foreach (var usuario in _usuarios)
+        {
+            <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    <MudDatePicker @bind-Date="_periodoDe" Label="Criado de" Clearable="true" Style="min-width:160px" />
+    <MudDatePicker @bind-Date="_periodoAte" Label="Criado até" Clearable="true" Style="min-width:160px" />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Carregar">Aplicar filtros</MudButton>
+</div>
+
+<MudGrid>
+    <MudItem xs="12" sm="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Cartões ativos</MudText><MudText Typo="Typo.h4">@_cartoesAtivos</MudText></MudPaper></MudItem>
+    <MudItem xs="12" sm="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Atrasados</MudText><MudText Typo="Typo.h4" Color="Color.Error">@_atrasados</MudText></MudPaper></MudItem>
+    <MudItem xs="12" sm="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Concluídos</MudText><MudText Typo="Typo.h4" Color="Color.Success">@_concluidos</MudText></MudPaper></MudItem>
+    <MudItem xs="12" sm="6" md="3"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Tempo até início (média)</MudText><MudText Typo="Typo.h4">@_tempoAteInicioMedio.ToString("0.0") d</MudText></MudPaper></MudItem>
+</MudGrid>
+
+<MudText Typo="Typo.h6" Class="mt-5 mb-2">Lead time e tempo de fila por lista</MudText>
+<MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">Lead time = tempo médio que os cartões passam na lista. Tempo de fila = tempo médio até a primeira atividade registrada (comentário, campo, reunião, anexo ou e-mail) após entrar na lista.</MudText>
+<MudTable Items="_leadTimePorLista" RowsPerPage="@ItensPorPagina" Dense="true" Striped="true" Hover="true">
+    <HeaderContent><MudTh>Lista</MudTh><MudTh>Lead time médio (dias)</MudTh><MudTh>Tempo de fila médio (dias)</MudTh><MudTh>Amostras</MudTh></HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Nome</MudTd><MudTd>@context.LeadTimeDias.ToString("0.00")</MudTd><MudTd>@context.TempoFilaDias.ToString("0.00")</MudTd><MudTd>@context.Amostras</MudTd>
+    </RowTemplate>
+    <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+</MudTable>
+
+<MudText Typo="Typo.h6" Class="mt-5 mb-2">Volume por sistema</MudText>
+<MudTable Items="_volumePorSistema" RowsPerPage="@ItensPorPagina" Dense="true" Striped="true" Hover="true">
+    <HeaderContent><MudTh>Sistema</MudTh><MudTh>Abertos</MudTh><MudTh>Concluídos</MudTh><MudTh>Total</MudTh></HeaderContent>
+    <RowTemplate><MudTd>@context.Nome</MudTd><MudTd>@context.Abertos</MudTd><MudTd>@context.Concluidos</MudTd><MudTd>@context.Total</MudTd></RowTemplate>
+    <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+</MudTable>
+
+<MudText Typo="Typo.h6" Class="mt-5 mb-2">Carga de trabalho por desenvolvedor</MudText>
+<MudTable Items="_cargaPorDesenvolvedor" RowsPerPage="@ItensPorPagina" Dense="true" Striped="true" Hover="true">
+    <HeaderContent><MudTh>Desenvolvedor</MudTh><MudTh>Cartões ativos</MudTh><MudTh>Itens de tarefa ativos</MudTh><MudTh>Em conflito de data</MudTh></HeaderContent>
+    <RowTemplate>
+        <MudTd>@context.Nome</MudTd><MudTd>@context.CartoesAtivos</MudTd><MudTd>@context.ItensTarefaAtivos</MudTd>
+        <MudTd>@if (context.Conflitos > 0) { <MudChip T="string" Size="Size.Small" Color="Color.Error">@context.Conflitos</MudChip> } else { <MudText Typo="Typo.body2">0</MudText> }</MudTd>
+    </RowTemplate>
+    <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+</MudTable>
+
+@code {
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    private int _cartoesAtivos;
+    private int _atrasados;
+    private int _concluidos;
+    private double _tempoAteInicioMedio;
+    private List<VolumeSistema> _volumePorSistema = [];
+    private List<LinhaLista> _leadTimePorLista = [];
+    private List<LinhaDesenvolvedor> _cargaPorDesenvolvedor = [];
+    private List<Sistema> _sistemas = [];
+    private List<Usuario> _usuarios = [];
+    private string? _busca;
+    private int? _sistemaFiltro;
+    private int? _desenvolvedorFiltro;
+    private int? _solicitanteFiltro;
+    private DateTime? _periodoDe;
+    private DateTime? _periodoAte;
+
+    private static readonly HashSet<TipoHistoricoAtividade> EventosEntrada = [TipoHistoricoAtividade.CartaoCriado, TipoHistoricoAtividade.CartaoMovido];
+    private static readonly HashSet<TipoHistoricoAtividade> EventosAtividade =
+        [TipoHistoricoAtividade.CampoAlterado, TipoHistoricoAtividade.ComentarioAdicionado, TipoHistoricoAtividade.ItemTarefaAlterado,
+         TipoHistoricoAtividade.ReuniaoRegistrada, TipoHistoricoAtividade.AnexoAdicionado, TipoHistoricoAtividade.EmailEnviado];
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    private async Task Carregar()
+    {
+        _sistemas = await Db.Sistemas.Where(s => s.Ativo).OrderBy(s => s.Nome).ToListAsync();
+        _usuarios = await Db.Usuarios.Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+
+        var consulta = Db.Cartoes.Include(c => c.Lista).Include(c => c.Sistema).Include(c => c.Desenvolvedores)
+            .Include(c => c.ItensTarefa).Where(c => !c.Excluido).AsQueryable();
+        if (!string.IsNullOrWhiteSpace(_busca)) consulta = consulta.Where(c => c.Titulo.Contains(_busca) || (c.Descricao != null && c.Descricao.Contains(_busca)));
+        if (_sistemaFiltro.HasValue) consulta = consulta.Where(c => c.SistemaId == _sistemaFiltro.Value);
+        if (_desenvolvedorFiltro.HasValue) consulta = consulta.Where(c => c.Desenvolvedores.Any(d => d.UsuarioId == _desenvolvedorFiltro.Value));
+        if (_solicitanteFiltro.HasValue) consulta = consulta.Where(c => c.SolicitanteId == _solicitanteFiltro.Value);
+        if (_periodoDe.HasValue) consulta = consulta.Where(c => c.CriadoEm >= _periodoDe.Value.ToUniversalTime());
+        if (_periodoAte.HasValue) consulta = consulta.Where(c => c.CriadoEm <= _periodoAte.Value.ToUniversalTime().AddDays(1));
+
+        var cartoes = await consulta.ToListAsync();
+        _concluidos = cartoes.Count(EhConcluido);
+        _cartoesAtivos = cartoes.Count - _concluidos;
+        _atrasados = cartoes.Count(c => c.Prazo.HasValue && c.Prazo.Value.Date < DateTime.UtcNow.Date && !EhConcluido(c));
+
+        _volumePorSistema = cartoes.GroupBy(c => c.Sistema?.Nome ?? "Sem sistema")
+            .Select(g => new VolumeSistema(g.Key, g.Count(c => !EhConcluido(c)), g.Count(EhConcluido), g.Count()))
+            .OrderByDescending(v => v.Total).ToList();
+
+        var cartaoIds = cartoes.Select(c => c.Id).ToList();
+        var historicos = cartaoIds.Count == 0 ? [] : await Db.HistoricoAtividades.Where(h => cartaoIds.Contains(h.CartaoId)).OrderBy(h => h.OcorridoEm).ToListAsync();
+        var listasPorId = await Db.Listas.Where(l => !l.Excluido).ToDictionaryAsync(l => l.Id, l => l);
+
+        CalcularLeadTimeETempoFila(historicos, listasPorId);
+        CalcularTempoAteInicio(historicos, listasPorId);
+        CalcularCargaDesenvolvedor(cartoes);
+    }
+
+    private static bool EhConcluido(Cartao cartao) => cartao.Lista.Nome.Equals("Concluído", StringComparison.OrdinalIgnoreCase);
+
+    private void CalcularLeadTimeETempoFila(List<HistoricoAtividade> historicos, Dictionary<int, Lista> listasPorId)
+    {
+        var leadTimesPorLista = new Dictionary<int, List<double>>();
+        var filaPorLista = new Dictionary<int, List<double>>();
+        var agora = DateTime.UtcNow;
+
+        foreach (var grupo in historicos.GroupBy(h => h.CartaoId))
+        {
+            var eventosCartao = grupo.OrderBy(h => h.OcorridoEm).ToList();
+            var entradas = eventosCartao.Where(h => EventosEntrada.Contains(h.Tipo) && h.ListaDestinoId.HasValue).ToList();
+            for (var i = 0; i < entradas.Count; i++)
+            {
+                var entrada = entradas[i];
+                var listaId = entrada.ListaDestinoId!.Value;
+                var inicio = entrada.OcorridoEm;
+                var fim = i + 1 < entradas.Count ? entradas[i + 1].OcorridoEm : agora;
+                var duracao = Math.Max(0, (fim - inicio).TotalDays);
+                if (!leadTimesPorLista.TryGetValue(listaId, out var lista)) { lista = []; leadTimesPorLista[listaId] = lista; }
+                lista.Add(duracao);
+
+                var primeiraAtividade = eventosCartao.FirstOrDefault(h => EventosAtividade.Contains(h.Tipo) && h.OcorridoEm > inicio && h.OcorridoEm <= fim);
+                var tempoFila = Math.Max(0, ((primeiraAtividade?.OcorridoEm ?? fim) - inicio).TotalDays);
+                if (!filaPorLista.TryGetValue(listaId, out var filaLista)) { filaLista = []; filaPorLista[listaId] = filaLista; }
+                filaLista.Add(tempoFila);
+            }
+        }
+
+        _leadTimePorLista = leadTimesPorLista.Select(kv => new LinhaLista(
+                listasPorId.TryGetValue(kv.Key, out var lista) ? lista.Nome : $"Lista #{kv.Key}",
+                kv.Value.Average(), filaPorLista.TryGetValue(kv.Key, out var fila) ? fila.Average() : 0, kv.Value.Count))
+            .OrderByDescending(l => l.LeadTimeDias).ToList();
+    }
+
+    private void CalcularTempoAteInicio(List<HistoricoAtividade> historicos, Dictionary<int, Lista> listasPorId)
+    {
+        var tempos = new List<double>();
+        foreach (var grupo in historicos.GroupBy(h => h.CartaoId))
+        {
+            var criacao = grupo.FirstOrDefault(h => h.Tipo == TipoHistoricoAtividade.CartaoCriado);
+            if (criacao is null) continue;
+            var primeiraSaidaBacklog = grupo
+                .Where(h => h.Tipo == TipoHistoricoAtividade.CartaoMovido && h.ListaOrigemId.HasValue
+                    && listasPorId.TryGetValue(h.ListaOrigemId.Value, out var listaOrigem) && listaOrigem.EhBacklog)
+                .OrderBy(h => h.OcorridoEm).FirstOrDefault();
+            if (primeiraSaidaBacklog is null) continue;
+            tempos.Add(Math.Max(0, (primeiraSaidaBacklog.OcorridoEm - criacao.OcorridoEm).TotalDays));
+        }
+        _tempoAteInicioMedio = tempos.DefaultIfEmpty(0).Average();
+    }
+
+    private void CalcularCargaDesenvolvedor(List<Cartao> cartoes)
+    {
+        var ativos = cartoes.Where(c => !EhConcluido(c)).ToList();
+        var porDev = new Dictionary<int, (int Cartoes, int Itens, int Conflitos)>();
+
+        foreach (var cartao in ativos)
+        {
+            var conflita = TemConflitoData(cartao, ativos);
+            foreach (var dev in cartao.Desenvolvedores)
+            {
+                var atual = porDev.GetValueOrDefault(dev.UsuarioId);
+                porDev[dev.UsuarioId] = (atual.Cartoes + 1, atual.Itens, atual.Conflitos + (conflita ? 1 : 0));
+            }
+            foreach (var item in cartao.ItensTarefa.Where(i => !i.Concluido && i.DesenvolvedorId.HasValue))
+            {
+                var atual = porDev.GetValueOrDefault(item.DesenvolvedorId!.Value);
+                porDev[item.DesenvolvedorId.Value] = (atual.Cartoes, atual.Itens + 1, atual.Conflitos);
+            }
+        }
+
+        _cargaPorDesenvolvedor = porDev.Select(kv => new LinhaDesenvolvedor(
+                _usuarios.FirstOrDefault(u => u.Id == kv.Key)?.Nome ?? $"Usuário #{kv.Key}",
+                kv.Value.Cartoes, kv.Value.Itens, kv.Value.Conflitos))
+            .OrderByDescending(l => l.CartoesAtivos).ToList();
+    }
+
+    private static bool TemConflitoData(Cartao cartao, List<Cartao> universo)
+    {
+        if (!cartao.Prazo.HasValue || cartao.Desenvolvedores.Count == 0) return false;
+        var inicio = (cartao.DataInicio ?? cartao.Prazo.Value).Date;
+        var fim = cartao.Prazo.Value.Date;
+        var devs = cartao.Desenvolvedores.Select(d => d.UsuarioId).ToHashSet();
+        return universo.Any(outro => outro.Id != cartao.Id && outro.Prazo.HasValue
+            && devs.Overlaps(outro.Desenvolvedores.Select(d => d.UsuarioId))
+            && inicio <= outro.Prazo!.Value.Date && (outro.DataInicio ?? outro.Prazo.Value).Date <= fim);
+    }
+
+    private sealed record VolumeSistema(string Nome, int Abertos, int Concluidos, int Total);
+    private sealed record LinhaLista(string Nome, double LeadTimeDias, double TempoFilaDias, int Amostras);
+    private sealed record LinhaDesenvolvedor(string Nome, int CartoesAtivos, int ItensTarefaAtivos, int Conflitos);
+
+    private string UrlExportacao(string formato)
+    {
+        var parametros = new List<string>();
+        if (!string.IsNullOrWhiteSpace(_busca)) parametros.Add($"busca={Uri.EscapeDataString(_busca)}");
+        if (_sistemaFiltro.HasValue) parametros.Add($"sistemaId={_sistemaFiltro.Value}");
+        if (_desenvolvedorFiltro.HasValue) parametros.Add($"desenvolvedorId={_desenvolvedorFiltro.Value}");
+        if (_solicitanteFiltro.HasValue) parametros.Add($"solicitanteId={_solicitanteFiltro.Value}");
+        if (_periodoDe.HasValue) parametros.Add($"periodoDe={Uri.EscapeDataString(_periodoDe.Value.ToString("yyyy-MM-dd"))}");
+        if (_periodoAte.HasValue) parametros.Add($"periodoAte={Uri.EscapeDataString(_periodoAte.Value.ToString("yyyy-MM-dd"))}");
+        return $"/api/export/cartoes.{formato}?{string.Join("&", parametros)}";
+    }
+}

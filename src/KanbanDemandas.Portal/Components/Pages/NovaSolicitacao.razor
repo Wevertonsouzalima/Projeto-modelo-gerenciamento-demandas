@@ -1,0 +1,143 @@
+@page "/nova"
+@inject PortalService Portal
+@inject SessaoUsuario Sessao
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+
+<PageTitle>Nova solicitação</PageTitle>
+
+<MudText Typo="Typo.h5" Class="mb-4">Nova solicitação</MudText>
+
+@if (!_config.Configurado)
+{
+    <MudAlert Severity="Severity.Warning">
+        O portal ainda não está recebendo solicitações. Peça ao administrador para escolher o quadro e a lista de entrada em Parametrização › Portal.
+    </MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+        <MudForm @ref="_form">
+            <MudTextField @bind-Value="_titulo" Label="Título" Required="true" RequiredError="Descreva o pedido em poucas palavras."
+                          MaxLength="200" Counter="200" HelperText="Resumo do que você precisa." />
+
+            <div class="d-flex flex-wrap gap-3 mt-2">
+                @if (_config.Tipos.Count > 0)
+                {
+                    <MudSelect T="string" @bind-Value="_tipo" Label="Tipo de solicitação" Required="true" RequiredError="Escolha o tipo." Style="min-width:220px" Class="flex-grow-1">
+                        @foreach (var tipo in _config.Tipos)
+                        {
+                            <MudSelectItem Value="@tipo">@tipo</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+                <MudSelect T="int?" @bind-Value="_sistemaId" Label="Sistema" Clearable="true" Style="min-width:220px" Class="flex-grow-1"
+                           ToStringFunc="@(id => _sistemas.FirstOrDefault(s => s.Id == id)?.Nome ?? "")">
+                    @foreach (var sistema in _sistemas)
+                    {
+                        <MudSelectItem T="int?" Value="@sistema.Id">@sistema.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="Prioridade?" @bind-Value="_urgencia" Label="Urgência" Clearable="true" Style="min-width:180px" Class="flex-grow-1"
+                           HelperText="Opcional; o time pode ajustar."
+                           ToStringFunc="@(p => p.HasValue ? PortalService.NomePrioridade(p.Value) : "")">
+                    @foreach (var p in Enum.GetValues<Prioridade>())
+                    {
+                        <MudSelectItem T="Prioridade?" Value="@p">@PortalService.NomePrioridade(p)</MudSelectItem>
+                    }
+                </MudSelect>
+            </div>
+
+            <MudTextField @bind-Value="_descricao" Label="Descrição" Lines="8" Required="true" RequiredError="Explique o que precisa."
+                          Class="mt-2" MaxLength="10000"
+                          HelperText="Conte o contexto, o comportamento esperado e, se for erro, os passos para reproduzir." />
+
+            @if (_config.PermitirAnexos)
+            {
+                <div class="mt-4">
+                    <MudFileUpload T="IReadOnlyList<IBrowserFile>" FilesChanged="AoEscolherArquivos" MaximumFileCount="10">
+                        <ActivatorContent>
+                            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.AttachFile">Anexar arquivos</MudButton>
+                        </ActivatorContent>
+                    </MudFileUpload>
+                    <MudText Typo="Typo.caption" Class="d-block mt-1">
+                        Até @_config.LimiteMbArquivo MB por arquivo@(_config.ExtensoesPermitidas.Count > 0 ? $"; tipos aceitos: {string.Join(", ", _config.ExtensoesPermitidas)}" : "").
+                    </MudText>
+                    @foreach (var arquivo in _arquivos)
+                    {
+                        <MudChip T="string" OnClose="@(() => _arquivos.Remove(arquivo))" Icon="@Icons.Material.Filled.InsertDriveFile">
+                            @arquivo.Name (@Formatacao.Tamanho(arquivo.Size))
+                        </MudChip>
+                    }
+                </div>
+            }
+        </MudForm>
+
+        <div class="d-flex justify-end gap-2 mt-4">
+            <MudButton Href="/" Variant="Variant.Text">Cancelar</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_enviando" OnClick="EnviarAsync"
+                       StartIcon="@(_enviando ? null : Icons.Material.Filled.Send)">
+                @if (_enviando)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                }
+                Enviar solicitação
+            </MudButton>
+        </div>
+    </MudPaper>
+}
+
+@code {
+    private MudForm _form = default!;
+    private ConfiguracaoDoPortal _config = default!;
+    private List<Sistema> _sistemas = [];
+    private readonly List<IBrowserFile> _arquivos = [];
+    private string _titulo = "";
+    private string _descricao = "";
+    private string? _tipo;
+    private int? _sistemaId;
+    private Prioridade? _urgencia;
+    private bool _enviando;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _config = Portal.Configuracao;
+        _sistemas = await Portal.SistemasAsync();
+    }
+
+    private void AoEscolherArquivos(IReadOnlyList<IBrowserFile>? arquivos)
+    {
+        foreach (var arquivo in arquivos ?? [])
+            if (_arquivos.All(a => a.Name != arquivo.Name)) _arquivos.Add(arquivo);
+    }
+
+    private async Task EnviarAsync()
+    {
+        await _form.Validate();
+        if (!_form.IsValid) return;
+        if (Sessao.UsuarioId is not int usuarioId)
+        {
+            Snackbar.Add("Escolha o usuário no canto superior direito.", Severity.Warning);
+            return;
+        }
+
+        _enviando = true;
+        try
+        {
+            var limite = _config.LimiteMbArquivo * 1024L * 1024L;
+            var arquivos = _arquivos.Select(a => new ArquivoEnviado(a.Name, string.IsNullOrEmpty(a.ContentType) ? "application/octet-stream" : a.ContentType,
+                a.Size, () => a.OpenReadStream(limite))).ToList();
+            var id = await Portal.CriarAsync(usuarioId, _titulo, _descricao, _tipo, _sistemaId, _urgencia, arquivos);
+            Snackbar.Add("Solicitação enviada! Você pode acompanhar o andamento por aqui.", Severity.Success);
+            Nav.NavigateTo($"/solicitacoes/{id}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _enviando = false;
+        }
+    }
+}

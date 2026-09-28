@@ -1,0 +1,407 @@
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+@inject MovimentacaoCartaoService Movimentacao
+@inject AssistenteMovimentacao Assistente
+@inject ValoresCampoService ValoresCampo
+
+<MudDialog>
+    <DialogContent>
+        @if (!CartaoId.HasValue && _templates.Count > 0)
+        {
+            <MudSelect T="int?" Value="_templateId" ValueChanged="AplicarTemplate" ToStringFunc="@(id => _templates.FirstOrDefault(t => t.Id == id)?.Nome)" Label="Template (opcional)" Clearable="true" Class="mb-3">
+                @foreach (var template in _templates)
+                {
+                    <MudSelectItem Value="@((int?)template.Id)">@template.Nome</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        <MudTextField @bind-Value="_titulo" Label="Título" Required="true" MaxLength="300" />
+        <MudSelect T="int" @bind-Value="_listaId" ToStringFunc="@(id => NomeLista(id))" Label="Lista" Class="mt-3">
+            @foreach (var lista in _listasFolha)
+            {
+                <MudSelectItem Value="@lista.Id">@ListasQuadro.NomeCompleto(lista, _listas)</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField @bind-Value="_descricao" Label="Descrição" Lines="4" MaxLength="4000" Class="mt-3" />
+        <div class="d-flex gap-3 mt-3">
+            @if (_mostrarInicio)
+            {
+                <MudDatePicker @bind-Date="_dataInicio" Label="Início" Clearable="true" Disabled="@Bloqueado(CamposFixosCartao.DataInicio)"
+                               HelperText="@(Ajuda(CamposFixosCartao.DataInicio) ?? "Definida ao entrar na etapa de início")" />
+            }
+            <MudDatePicker @bind-Date="_prazo" Label="@Rotulo("Prazo", CamposFixosCartao.Prazo)" Clearable="true"
+                           Disabled="@Bloqueado(CamposFixosCartao.Prazo)" HelperText="@Ajuda(CamposFixosCartao.Prazo)" />
+            <MudNumericField T="decimal?" @bind-Value="_estimativa" Label="@Rotulo("Estimativa (pontos)", CamposFixosCartao.Estimativa)" Min="0" Clearable="true"
+                             Disabled="@Bloqueado(CamposFixosCartao.Estimativa)" HelperText="@Ajuda(CamposFixosCartao.Estimativa)" />
+            <MudSelect T="Prioridade?" @bind-Value="_prioridade" Label="Prioridade" Clearable="true">
+                @foreach (var prioridade in Enum.GetValues<Prioridade>())
+                {
+                    <MudSelectItem Value="@((Prioridade?)prioridade)">@prioridade</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+        @if (Bloqueado(CamposFixosCartao.Desenvolvedor))
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3" Icon="@Icons.Material.Filled.PersonOff">
+                @Ajuda(CamposFixosCartao.Desenvolvedor)@(_desenvolvedorIds.Count > 0 ? $" Atual: {string.Join(", ", _desenvolvedorIds.Select(id => NomeUsuario(id)))}." : "")
+            </MudAlert>
+        }
+        else
+        {
+            <MultiSelecaoFiltro Label="@Rotulo("Desenvolvedores", CamposFixosCartao.Desenvolvedor)" Class="mt-3"
+                                Opcoes="@(_usuarios.Select(u => new OpcaoSelecao(u.Id, u.Nome)).ToList())"
+                                Selecionados="_desenvolvedorIds" SelecionadosChanged="SelecionarDesenvolvedores" />
+        }
+        @if (_desenvolvedorIds.Count > 1 && !Bloqueado(CamposFixosCartao.Desenvolvedor))
+        {
+            <MudSelect T="int?" @bind-Value="_desenvolvedorPrincipalId" ToStringFunc="@(id => NomeUsuario(id))" Label="Desenvolvedor principal" Class="mt-3">
+                @foreach (var id in _desenvolvedorIds)
+                {
+                    <MudSelectItem Value="@((int?)id)">@NomeUsuario(id)</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        <div class="d-flex gap-3 mt-3">
+            <MudSelect T="int?" @bind-Value="_sistemaId" ToStringFunc="@(id => _sistemas.FirstOrDefault(s => s.Id == id)?.Nome)" Label="@Rotulo("Sistema", CamposFixosCartao.Sistema)" Clearable="true"
+                       Disabled="@Bloqueado(CamposFixosCartao.Sistema)" HelperText="@Ajuda(CamposFixosCartao.Sistema)">
+                @foreach (var sistema in _sistemas)
+                {
+                    <MudSelectItem Value="@((int?)sistema.Id)">@sistema.Nome</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSelect T="int?" @bind-Value="_solicitanteId" ToStringFunc="@(id => NomeUsuario(id))" Label="@Rotulo("Solicitante", CamposFixosCartao.Solicitante)" Clearable="true"
+                       Disabled="@Bloqueado(CamposFixosCartao.Solicitante)" HelperText="@Ajuda(CamposFixosCartao.Solicitante)">
+                @foreach (var usuario in _usuarios)
+                {
+                    <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+                }
+            </MudSelect>
+        </div>
+        @if (_etiquetas.Count > 0)
+        {
+            <MultiSelecaoFiltro Label="Etiquetas" Class="mt-3"
+                                Opcoes="@(_etiquetas.Select(e => new OpcaoSelecao(e.Id, e.Nome, e.Cor)).ToList())"
+                                Selecionados="_etiquetaIds" SelecionadosChanged="SelecionarEtiquetas" />
+        }
+        @if (CamposExibidos.Any())
+        {
+            <MudDivider Class="my-4" />
+            <MudText Typo="Typo.subtitle2">Campos de "@NomeLista(ListaDosCampos)"</MudText>
+            @foreach (var campo in CamposExibidos)
+            {
+                <div class="mt-2">
+                    <CampoListaEditor Campo="campo" Valor="@_valoresCampo.GetValueOrDefault(campo.Id)" ValorChanged="@(v => _valoresCampo[campo.Id] = v)" />
+                </div>
+            }
+            @if (_cartao is not null && _listaId != _cartao.ListaId)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Os campos da nova lista serão pedidos ao mover o cartão.</MudText>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancelar">Cancelar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@string.IsNullOrWhiteSpace(_titulo)" OnClick="Salvar">Salvar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int ListaId { get; set; }
+    [Parameter] public int? CartaoId { get; set; }
+    private string _titulo = string.Empty;
+    private string? _descricao;
+    private DateTime? _prazo;
+    private DateTime? _dataInicio;
+    private decimal? _estimativa;
+    private Prioridade? _prioridade;
+    private int? _sistemaId;
+    private int? _solicitanteId;
+    private List<Sistema> _sistemas = [];
+    private List<Usuario> _usuarios = [];
+    private List<Etiqueta> _etiquetas = [];
+    private HashSet<int> _desenvolvedorIds = [];
+    private int? _desenvolvedorPrincipalId;
+    private HashSet<int> _etiquetaIds = [];
+    private List<TemplateCartao> _templates = [];
+    private int? _templateId;
+    private Cartao? _cartao;
+    private int _quadroId;
+    private int _listaId;
+    private List<Lista> _listas = [];
+    private List<Lista> _listasFolha = [];
+    private List<DefinicaoCampo> _camposQuadro = [];
+    private readonly Dictionary<int, string?> _valoresCampo = [];
+    private bool _mostrarInicio;
+
+    // Cartão existente mostra os campos da lista onde está; cartão novo, os da lista escolhida.
+    private int ListaDosCampos => _cartao?.ListaId ?? _listaId;
+    private IEnumerable<DefinicaoCampo> CamposExibidos => _camposQuadro.Where(c => c.ListaId == ListaDosCampos).OrderBy(c => c.Ordem);
+
+    private CamposFixosCartao ExigidosDaLista => _listas.FirstOrDefault(l => l.Id == _listaId)?.CamposFixosExigidos ?? CamposFixosCartao.Nenhum;
+
+    private string Rotulo(string nome, CamposFixosCartao campo) => ExigidosDaLista.HasFlag(campo) ? nome + " *" : nome;
+
+    // Campos proibidos na lista escolhida (ex.: desenvolvedor no Backlog).
+    private CamposFixosCartao BloqueadosDaLista => _listas.FirstOrDefault(l => l.Id == _listaId)?.CamposFixosBloqueados ?? CamposFixosCartao.Nenhum;
+
+    private bool Bloqueado(CamposFixosCartao campo) => BloqueadosDaLista.HasFlag(campo);
+
+    private bool MudandoDeLista => _cartao is not null && _cartao.ListaId != _listaId;
+
+    private string? Ajuda(CamposFixosCartao campo) => !Bloqueado(campo) ? null
+        : MudandoDeLista ? $"Não permitido em \"{NomeLista(_listaId)}\": será removido ao mover."
+        : $"Não permitido em \"{NomeLista(_listaId)}\".";
+
+    /// <summary>Cartão novo ou que continua na mesma lista não grava o que a lista proíbe (ao mudar de lista, a movimentação cuida disso).</summary>
+    private void DescartarBloqueados()
+    {
+        if (MudandoDeLista) return;
+        if (Bloqueado(CamposFixosCartao.Prazo)) _prazo = null;
+        if (Bloqueado(CamposFixosCartao.DataInicio)) _dataInicio = null;
+        if (Bloqueado(CamposFixosCartao.Estimativa)) _estimativa = null;
+        if (Bloqueado(CamposFixosCartao.Sistema)) _sistemaId = null;
+        if (Bloqueado(CamposFixosCartao.Solicitante)) _solicitanteId = null;
+        if (Bloqueado(CamposFixosCartao.Desenvolvedor)) { _desenvolvedorIds = []; _desenvolvedorPrincipalId = null; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _listaId = ListaId;
+        await CarregarDadosAsync();
+        _listas = await Db.Listas
+            .Where(l => l.QuadroId == _quadroId && !l.Excluido)
+            .ToListAsync();
+        _listasFolha = ListasQuadro.FolhasEmOrdem(_listas);
+        if (ListasQuadro.EhGrupo(_listaId, _listas))
+            _listaId = ListasQuadro.PrimeiraFolha(_listaId, _listas);
+        var idsListas = _listas.Select(l => l.Id).ToList();
+        _camposQuadro = await Db.DefinicoesCampo.Where(c => idsListas.Contains(c.ListaId) && !c.Excluido).ToListAsync();
+        _mostrarInicio = _cartao?.DataInicio is not null;
+        if (_cartao is null) return;
+        var valores = await Db.ValoresCampoCartao
+            .Where(v => v.CartaoId == _cartao.Id)
+            .OrderByDescending(v => v.NumeroEntradaNaLista).ThenByDescending(v => v.DataPreenchimento)
+            .ToListAsync();
+        foreach (var valor in valores)
+            _valoresCampo.TryAdd(valor.DefinicaoCampoId, valor.Valor);
+    }
+
+    private string? NomeLista(int id)
+    {
+        var lista = _listas.FirstOrDefault(l => l.Id == id);
+        return lista is null ? null : ListasQuadro.NomeCompleto(lista, _listas);
+    }
+
+    private string? NomeUsuario(int? id) => _usuarios.FirstOrDefault(u => u.Id == id)?.Nome;
+
+    /// <summary>Pendências da lista escolhida considerando o que está preenchido no formulário.</summary>
+    private List<string> PendenciasDoFormulario()
+    {
+        var lista = _listas.FirstOrDefault(l => l.Id == _listaId);
+        if (lista is null) return [];
+        var noFormulario = new Cartao
+        {
+            Prazo = _prazo, Estimativa = _estimativa, SistemaId = _sistemaId, SolicitanteId = _solicitanteId,
+            Desenvolvedores = _desenvolvedorIds.Select(id => new CartaoDesenvolvedor { UsuarioId = id }).ToList()
+        };
+        var pendencias = RegrasEtapa.Separar(RegrasEtapa.FixosFaltando(noFormulario, lista)).Select(RegrasEtapa.Nome).ToList();
+        pendencias.AddRange(_camposQuadro
+            .Where(c => c.ListaId == _listaId && c.Obrigatorio && RegrasEtapa.EhManual(c)
+                && string.IsNullOrWhiteSpace(_valoresCampo.GetValueOrDefault(c.Id)))
+            .Select(c => c.Nome));
+        return pendencias;
+    }
+
+    private async Task CarregarDadosAsync()
+    {
+        _sistemas = await Db.Sistemas.Where(s => s.Ativo).OrderBy(s => s.Nome).ToListAsync();
+        _usuarios = await Db.Usuarios.Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        var quadroId = await Db.Listas.Where(l => l.Id == ListaId).Select(l => (int?)l.QuadroId).FirstOrDefaultAsync();
+        if (quadroId.HasValue)
+        {
+            _quadroId = quadroId.Value;
+            _templates = await Db.TemplatesCartao.Where(t => t.QuadroId == quadroId.Value).OrderBy(t => t.Nome).ToListAsync();
+            _etiquetas = await Db.Etiquetas.Where(e => e.QuadroId == quadroId.Value && !e.Excluido).OrderBy(e => e.Nome).ToListAsync();
+        }
+        if (!CartaoId.HasValue) return;
+        _cartao = await Db.Cartoes.FirstOrDefaultAsync(c => c.Id == CartaoId && !c.Excluido);
+        if (_cartao is null) return;
+        _titulo = _cartao.Titulo; _descricao = _cartao.Descricao; _prazo = _cartao.Prazo?.ToLocalTime(); _dataInicio = _cartao.DataInicio?.ToLocalTime(); _estimativa = _cartao.Estimativa; _prioridade = _cartao.Prioridade;
+        _sistemaId = _cartao.SistemaId; _solicitanteId = _cartao.SolicitanteId; _listaId = _cartao.ListaId;
+        var desenvolvedoresExistentes = await Db.CartaoDesenvolvedores.Where(d => d.CartaoId == _cartao.Id).ToListAsync();
+        _desenvolvedorIds = desenvolvedoresExistentes.Select(d => d.UsuarioId).ToHashSet();
+        _desenvolvedorPrincipalId = desenvolvedoresExistentes.FirstOrDefault(d => d.Principal)?.UsuarioId;
+        _etiquetaIds = (await Db.CartaoEtiquetas.Where(e => e.CartaoId == _cartao.Id).Select(e => e.EtiquetaId).ToListAsync()).ToHashSet();
+        if (!quadroId.HasValue)
+        {
+            _quadroId = await Db.Listas.Where(l => l.Id == _cartao.ListaId).Select(l => l.QuadroId).FirstAsync();
+            _etiquetas = await Db.Etiquetas.Where(e => e.QuadroId == _quadroId && !e.Excluido).OrderBy(e => e.Nome).ToListAsync();
+        }
+    }
+
+    private async Task Salvar()
+    {
+        if (string.IsNullOrWhiteSpace(_titulo)) return;
+        if (_dataInicio.HasValue && _prazo.HasValue && _dataInicio.Value.Date > _prazo.Value.Date)
+        {
+            Snackbar.Add("A data de início não pode ser depois do prazo.", Severity.Warning);
+            return;
+        }
+        DescartarBloqueados();
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        var criando = _cartao is null;
+        if (criando && _listas.FirstOrDefault(l => l.Id == _listaId)?.BloquearEntradaComPendencias == true)
+        {
+            var pendencias = PendenciasDoFormulario();
+            if (pendencias.Count > 0)
+            {
+                Snackbar.Add($"\"{NomeLista(_listaId)}\" exige: {string.Join(", ", pendencias)}.", Severity.Warning);
+                return;
+            }
+        }
+        if (_cartao is null)
+        {
+            var ordem = (await Db.Cartoes.Where(c => c.ListaId == _listaId && !c.Excluido).Select(c => (int?)c.Ordem).MaxAsync() ?? 0) + 1;
+            _cartao = new Cartao { Titulo = _titulo.Trim(), Descricao = _descricao?.Trim(), ListaId = _listaId, Ordem = ordem, Prazo = _prazo?.ToUniversalTime(), DataInicio = _dataInicio?.ToUniversalTime(), Estimativa = _estimativa, Prioridade = _prioridade, SistemaId = _sistemaId, SolicitanteId = _solicitanteId, CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow };
+            Db.Cartoes.Add(_cartao);
+            await Db.SaveChangesAsync();
+            Db.HistoricoAtividades.Add(new HistoricoAtividade { CartaoId = _cartao.Id, Tipo = TipoHistoricoAtividade.CartaoCriado, ListaDestinoId = _listaId, Descricao = "Cartão criado.", UsuarioId = usuarioId, OcorridoEm = DateTime.UtcNow });
+            var template = _templates.FirstOrDefault(t => t.Id == _templateId);
+            if (!string.IsNullOrWhiteSpace(template?.ItensTarefaPadrao))
+            {
+                try
+                {
+                    var tarefas = System.Text.Json.JsonSerializer.Deserialize<List<string>>(template.ItensTarefaPadrao) ?? [];
+                    Db.ItensTarefa.AddRange(tarefas.Where(t => !string.IsNullOrWhiteSpace(t)).Select((titulo, index) => new ItemTarefa
+                    {
+                        CartaoId = _cartao.Id, Titulo = titulo.Trim(), Ordem = index + 1,
+                        CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+                    }));
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    Snackbar.Add("Os itens padrão do template não estão em JSON válido.", Severity.Warning);
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(template?.CamposPadrao))
+            {
+                try
+                {
+                    var camposPadrao = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(template.CamposPadrao) ?? [];
+                    var definicoesLista = await Db.DefinicoesCampo.Where(c => c.ListaId == _listaId && !c.Excluido).ToListAsync();
+                    foreach (var (nomeCampo, valor) in camposPadrao)
+                    {
+                        var definicao = definicoesLista.FirstOrDefault(c => c.Nome.Equals(nomeCampo, StringComparison.OrdinalIgnoreCase));
+                        if (definicao is null) continue;
+                        Db.ValoresCampoCartao.Add(new ValorCampoCartao
+                        {
+                            CartaoId = _cartao.Id, DefinicaoCampoId = definicao.Id, Valor = valor,
+                            NumeroEntradaNaLista = 1, DataPreenchimento = DateTime.UtcNow,
+                            PreenchidoPorId = usuarioId, CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+                        });
+                    }
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    Snackbar.Add("Os campos padrão do template não estão em JSON válido.", Severity.Warning);
+                }
+            }
+        }
+        else
+        {
+            _cartao.Titulo = _titulo.Trim(); _cartao.Descricao = _descricao?.Trim(); _cartao.Prazo = _prazo?.ToUniversalTime(); _cartao.DataInicio = _dataInicio?.ToUniversalTime(); _cartao.Estimativa = _estimativa; _cartao.Prioridade = _prioridade; _cartao.SistemaId = _sistemaId; _cartao.SolicitanteId = _solicitanteId;
+        }
+        var desenvolvedoresAtuais = await Db.CartaoDesenvolvedores.Where(d => d.CartaoId == _cartao.Id).ToListAsync();
+        var idsAntigos = desenvolvedoresAtuais.Select(d => d.UsuarioId).ToHashSet();
+        var novosDesenvolvedores = _desenvolvedorIds.Where(id => !idsAntigos.Contains(id)).ToList();
+        Db.CartaoDesenvolvedores.RemoveRange(desenvolvedoresAtuais);
+        var principalId = _desenvolvedorIds.Contains(_desenvolvedorPrincipalId ?? -1) ? _desenvolvedorPrincipalId : _desenvolvedorIds.OrderBy(id => id).FirstOrDefault();
+        Db.CartaoDesenvolvedores.AddRange(_desenvolvedorIds.Select(id => new CartaoDesenvolvedor
+        {
+            CartaoId = _cartao.Id, UsuarioId = id, Principal = id == principalId
+        }));
+        var etiquetasAtuais = await Db.CartaoEtiquetas.Where(e => e.CartaoId == _cartao.Id).ToListAsync();
+        Db.CartaoEtiquetas.RemoveRange(etiquetasAtuais);
+        Db.CartaoEtiquetas.AddRange(_etiquetaIds.Select(id => new CartaoEtiqueta { CartaoId = _cartao.Id, EtiquetaId = id }));
+
+        Db.Notificacoes.AddRange(novosDesenvolvedores.Where(id => id != usuarioId).Select(id => new Notificacao
+        {
+            DestinatarioId = id, CartaoOrigemId = _cartao.Id, Tipo = TipoNotificacao.AtribuicaoCartao,
+            Mensagem = $"Você foi atribuído ao cartão '{_cartao.Titulo}'.", CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+        }));
+
+        await Db.SaveChangesAsync();
+        await NotificarConflitosSeNecessarioAsync(usuarioId);
+        Snackbar.Add("Cartão salvo.", Severity.Success);
+
+        var valoresManuais = CamposExibidos.Where(RegrasEtapa.EhManual)
+            .Where(c => _valoresCampo.ContainsKey(c.Id))
+            .ToDictionary(c => c.Id, c => _valoresCampo[c.Id]);
+        if (valoresManuais.Count > 0)
+            await ValoresCampo.SalvarValoresAsync(_cartao.Id, ListaDosCampos, valoresManuais);
+
+        if (criando)
+            await Movimentacao.AplicarEntradaNaCriacaoAsync(_cartao.Id);
+        else if (_cartao.ListaId != _listaId)
+            await Assistente.MoverAsync(_cartao.Id, _listaId, null);
+
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    /// <summary>
+    /// Verifica se o cartão salvo entrou em conflito de data com outro do mesmo desenvolvedor no quadro
+    /// e notifica os desenvolvedores envolvidos, evitando duplicar notificação já pendente para o mesmo par.
+    /// </summary>
+    private async Task NotificarConflitosSeNecessarioAsync(int usuarioId)
+    {
+        if (_cartao is null || !_cartao.Prazo.HasValue || _desenvolvedorIds.Count == 0) return;
+        var inicio = (_cartao.DataInicio ?? _cartao.Prazo.Value).Date;
+        var fim = _cartao.Prazo.Value.Date;
+
+        var outrosCartoes = await Db.Cartoes
+            .Include(c => c.Desenvolvedores)
+            .Where(c => c.Id != _cartao.Id && c.Lista.QuadroId == _quadroId && !c.Excluido && c.Prazo.HasValue)
+            .ToListAsync();
+
+        var conflitantes = outrosCartoes.Where(outro => _desenvolvedorIds.Overlaps(outro.Desenvolvedores.Select(d => d.UsuarioId))
+            && inicio <= outro.Prazo!.Value.Date && (outro.DataInicio ?? outro.Prazo.Value).Date <= fim).ToList();
+        if (conflitantes.Count == 0) return;
+
+        foreach (var devId in _desenvolvedorIds.Where(id => id != usuarioId))
+        {
+            var jaNotificado = await Db.Notificacoes.AnyAsync(n => n.DestinatarioId == devId && n.CartaoOrigemId == _cartao.Id
+                && n.Tipo == TipoNotificacao.ConflitoData && !n.Lida);
+            if (jaNotificado) continue;
+            Db.Notificacoes.Add(new Notificacao
+            {
+                DestinatarioId = devId, CartaoOrigemId = _cartao.Id, Tipo = TipoNotificacao.ConflitoData,
+                Mensagem = $"O cartão '{_cartao.Titulo}' está com conflito de data com: {string.Join(", ", conflitantes.Select(c => c.Titulo))}.",
+                CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+            });
+        }
+        await Db.SaveChangesAsync();
+    }
+
+    private void Cancelar() => MudDialog.Cancel();
+
+    private void SelecionarDesenvolvedores(IEnumerable<int> valores)
+    {
+        _desenvolvedorIds = valores.ToHashSet();
+        if (_desenvolvedorPrincipalId.HasValue && !_desenvolvedorIds.Contains(_desenvolvedorPrincipalId.Value))
+            _desenvolvedorPrincipalId = null;
+    }
+
+    private void SelecionarEtiquetas(IEnumerable<int> valores)
+        => _etiquetaIds = valores.ToHashSet();
+
+    private void AplicarTemplate(int? templateId)
+    {
+        _templateId = templateId;
+        var template = _templates.FirstOrDefault(t => t.Id == templateId);
+        if (template is null) return;
+        _titulo = template.TitulopadraO ?? _titulo;
+        _descricao = template.DescricaoPadrao ?? _descricao;
+    }
+}

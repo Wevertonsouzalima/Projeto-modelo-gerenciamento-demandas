@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["KanbanDemandas.Web.styles.css"]" />
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <ReconnectModal />
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script>
+        // Download de arquivos gerados no servidor (ex.: exportação dos relatórios).
+        window.kanbanBaixarArquivo = function (nome, base64, tipo) {
+            const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+            const url = URL.createObjectURL(new Blob([bytes], { type: tipo }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = nome;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+
+        window.kanbanDnd = (function () {
+            let dotNetRef = null;
+            let draggedCardId = null;
+            let draggedListaId = null;
+
+            function limparClasses() {
+                document.querySelectorAll('.kanban-card-dragging, .kanban-column-dragover, .kanban-card-dragover')
+                    .forEach(el => el.classList.remove('kanban-card-dragging', 'kanban-column-dragover', 'kanban-card-dragover'));
+            }
+
+            document.addEventListener('dragstart', function (e) {
+                if (!(e.target instanceof Element)) return;
+                const cardEl = e.target.closest('[data-cartao-id]');
+                const listaEl = cardEl ? null : e.target.closest('[data-lista-arrastavel-id]');
+                if (!cardEl && !listaEl) return;
+
+                if (e.target.closest('button, a, input, textarea')) {
+                    e.preventDefault();
+                    return;
+                }
+
+                if (listaEl) {
+                    draggedListaId = parseInt(listaEl.getAttribute('data-lista-arrastavel-id'), 10);
+                    draggedCardId = null;
+                    if (e.dataTransfer) {
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', 'lista:' + draggedListaId);
+                    }
+                    return;
+                }
+
+                draggedCardId = parseInt(cardEl.getAttribute('data-cartao-id'), 10);
+                draggedListaId = null;
+                if (e.dataTransfer) {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', String(draggedCardId));
+                }
+                requestAnimationFrame(() => cardEl.classList.add('kanban-card-dragging'));
+            });
+
+            document.addEventListener('dragover', function (e) {
+                if (!(e.target instanceof Element)) return;
+                const colEl = e.target.closest('[data-lista-id]');
+                if (!colEl || (draggedCardId === null && draggedListaId === null)) return;
+
+                e.preventDefault();
+                if (e.dataTransfer) {
+                    e.dataTransfer.dropEffect = 'move';
+                }
+
+                document.querySelectorAll('.kanban-column-dragover').forEach(el => {
+                    if (el !== colEl) el.classList.remove('kanban-column-dragover');
+                });
+                colEl.classList.add('kanban-column-dragover');
+
+                if (draggedCardId === null) return;
+                const targetCardEl = e.target.closest('[data-cartao-id]');
+                document.querySelectorAll('.kanban-card-dragover').forEach(el => {
+                    if (el !== targetCardEl) el.classList.remove('kanban-card-dragover');
+                });
+                if (targetCardEl && !targetCardEl.classList.contains('kanban-card-dragging')) {
+                    targetCardEl.classList.add('kanban-card-dragover');
+                }
+            });
+
+            document.addEventListener('dragend', function () {
+                draggedCardId = null;
+                draggedListaId = null;
+                limparClasses();
+            });
+
+            document.addEventListener('drop', function (e) {
+                if (!(e.target instanceof Element)) return;
+                const colEl = e.target.closest('[data-lista-id]');
+                if (!colEl) return;
+
+                e.preventDefault();
+
+                const cartaoId = draggedCardId;
+                const listaOrigemId = draggedListaId;
+                const listaDestinoId = parseInt(colEl.getAttribute('data-lista-id'), 10);
+                const targetCardEl = e.target.closest('[data-cartao-id]');
+                const cartaoAlvoId = targetCardEl ? parseInt(targetCardEl.getAttribute('data-cartao-id'), 10) : null;
+
+                draggedCardId = null;
+                draggedListaId = null;
+                limparClasses();
+
+                if (!dotNetRef || isNaN(listaDestinoId)) return;
+                if (cartaoId !== null) {
+                    dotNetRef.invokeMethodAsync('MoverCartaoAsync', cartaoId, listaDestinoId, cartaoAlvoId);
+                } else if (listaOrigemId !== null) {
+                    dotNetRef.invokeMethodAsync('ReordenarListaAsync', listaOrigemId, listaDestinoId);
+                }
+            });
+
+            return {
+                registrarQuadro: function (ref) {
+                    dotNetRef = ref;
+                }
+            };
+        })();
+    </script>
+</body>
+
+</html>

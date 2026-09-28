@@ -1,0 +1,143 @@
+@page "/busca"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject NavigationManager Nav
+@inject IDialogService Dialog
+@inject IConfiguration Configuracao
+
+<PageTitle>Busca global</PageTitle>
+<MudText Typo="Typo.h5" Class="mb-4">Busca global</MudText>
+<div class="d-flex flex-wrap gap-3 align-end">
+    <MudTextField @bind-Value="_termo" Label="Título, descrição ou comentário" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Style="min-width:280px" OnKeyUp="@(async e => { if (e.Key == "Enter") await Buscar(); })" />
+    <MudSelect T="int?" @bind-Value="_participanteId" ToStringFunc="@(id => _usuarios.FirstOrDefault(u => u.Id == id)?.Nome)" Label="Reunião com participante" Clearable="true" Style="min-width:220px">
+        @foreach (var usuario in _usuarios)
+        {
+            <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Buscar">Buscar</MudButton>
+</div>
+
+@if (_pesquisou)
+{
+    <MudText Typo="Typo.body2" Class="mt-4 mb-2">@_total resultado(s)@(_total > 0 ? $" — página {_pagina} de {TotalPaginas}" : "")</MudText>
+    <MudTable Items="_resultados" Dense="true" Hover="true" Striped="true">
+        <HeaderContent><MudTh>Cartão</MudTh><MudTh>Quadro</MudTh><MudTh>Lista</MudTh><MudTh>Trecho</MudTh></HeaderContent>
+        <RowTemplate>
+            <MudTd><MudButton Variant="Variant.Text" OnClick="@(() => AbrirCartao(context))">@context.Titulo</MudButton></MudTd>
+            <MudTd>@context.QuadroNome</MudTd><MudTd>@context.ListaNome</MudTd><MudTd>@context.Trecho</MudTd>
+        </RowTemplate>
+    </MudTable>
+    @if (TotalPaginas > 1)
+    {
+        <div class="d-flex justify-center mt-3">
+            <MudPagination Count="TotalPaginas" Selected="_pagina" SelectedChanged="IrParaPagina" Color="Color.Primary" BoundaryCount="1" MiddleCount="3" />
+        </div>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "q")] public string? Query { get; set; }
+    private string _termo = string.Empty;
+    private int? _participanteId;
+    private bool _pesquisou;
+    private List<Usuario> _usuarios = [];
+    private List<ResultadoBusca> _resultados = [];
+    private int _total;
+    private int _pagina = 1;
+
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+    private int TotalPaginas => (int)Math.Ceiling(_total / (double)ItensPorPagina);
+
+    protected override async Task OnInitializedAsync()
+        => _usuarios = await Db.Usuarios.Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _termo = Query ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(_termo)) await Buscar();
+    }
+
+    private async Task Buscar()
+    {
+        _pagina = 1;
+        await CarregarPagina();
+    }
+
+    private async Task IrParaPagina(int pagina)
+    {
+        _pagina = pagina;
+        await CarregarPagina();
+    }
+
+    // Paginação no servidor: conta o total e lê apenas a página atual.
+    private async Task CarregarPagina()
+    {
+        var termo = _termo.Trim();
+        _pesquisou = true;
+        if (string.IsNullOrWhiteSpace(termo) && !_participanteId.HasValue) { _resultados = []; _total = 0; return; }
+
+        var query = Db.Cartoes.Include(c => c.Lista).ThenInclude(l => l.Quadro)
+            .Include(c => c.Comentarios)
+            .Include(c => c.Reunioes).ThenInclude(r => r.Participantes)
+            .Where(c => !c.Excluido).AsQueryable();
+
+        var temTermo = !string.IsNullOrWhiteSpace(termo);
+        if (temTermo && _participanteId.HasValue)
+        {
+            query = query.Where(c => c.Titulo.Contains(termo) || (c.Descricao != null && c.Descricao.Contains(termo))
+                || c.Comentarios.Any(m => m.Texto.Contains(termo))
+                || c.Reunioes.Any(r => r.Participantes.Any(p => p.UsuarioId == _participanteId.Value)));
+        }
+        else if (temTermo)
+        {
+            query = query.Where(c => c.Titulo.Contains(termo) || (c.Descricao != null && c.Descricao.Contains(termo))
+                || c.Comentarios.Any(m => m.Texto.Contains(termo)));
+        }
+        else
+        {
+            query = query.Where(c => c.Reunioes.Any(r => r.Participantes.Any(p => p.UsuarioId == _participanteId!.Value)));
+        }
+
+        _total = await query.CountAsync();
+        var cards = await query.OrderBy(c => c.Titulo).ThenBy(c => c.Id)
+            .Skip((_pagina - 1) * ItensPorPagina).Take(ItensPorPagina).AsSplitQuery().ToListAsync();
+        _resultados = cards.Select(c => new ResultadoBusca(c.Id, c.Titulo, c.Lista.QuadroId, c.Lista.Quadro.Nome, c.Lista.Nome,
+            ExtrairTrecho(termo, c, _participanteId))).ToList();
+    }
+
+    private string ExtrairTrecho(string termo, Cartao cartao, int? participanteId)
+    {
+        if (!string.IsNullOrWhiteSpace(termo))
+        {
+            var origem = cartao.Titulo.Contains(termo, StringComparison.OrdinalIgnoreCase) ? cartao.Titulo
+                : cartao.Descricao is not null && cartao.Descricao.Contains(termo, StringComparison.OrdinalIgnoreCase) ? cartao.Descricao
+                : cartao.Comentarios.Select(m => m.Texto).FirstOrDefault(t => t.Contains(termo, StringComparison.OrdinalIgnoreCase)) ?? "";
+            if (!string.IsNullOrEmpty(origem)) return JanelaDeTexto(termo, origem);
+        }
+        if (participanteId.HasValue)
+        {
+            var reuniao = cartao.Reunioes.FirstOrDefault(r => r.Participantes.Any(p => p.UsuarioId == participanteId.Value));
+            if (reuniao is not null) return $"Reunião de {reuniao.Data.ToLocalTime():dd/MM/yyyy}: {reuniao.Ata}";
+        }
+        return "";
+    }
+
+    private static string JanelaDeTexto(string termo, string origem)
+    {
+        var indice = origem.IndexOf(termo, StringComparison.OrdinalIgnoreCase);
+        if (indice < 0) return origem.Length > 120 ? origem[..120] + "…" : origem;
+
+        const int janela = 50;
+        var inicio = Math.Max(0, indice - janela);
+        var fim = Math.Min(origem.Length, indice + termo.Length + janela);
+        var trecho = origem[inicio..fim];
+        return (inicio > 0 ? "…" : "") + trecho + (fim < origem.Length ? "…" : "");
+    }
+
+    private async Task AbrirCartao(ResultadoBusca resultado)
+        => await Dialog.ShowAsync<Shared.DialogDetalhesCartao>("Detalhes do cartão",
+            new DialogParameters<Shared.DialogDetalhesCartao> { { x => x.CartaoId, resultado.Id } }, new DialogOptions { FullScreen = true, CloseButton = true });
+
+    private sealed record ResultadoBusca(int Id, string Titulo, int QuadroId, string QuadroNome, string ListaNome, string Trecho);
+}

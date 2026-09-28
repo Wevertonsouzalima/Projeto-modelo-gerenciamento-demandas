@@ -1,0 +1,154 @@
+@page "/notificacoes"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject PublicadorAlteracoesTempoReal Publicador
+@inject IConfiguration Configuracao
+@implements IDisposable
+
+<PageTitle>Notificações</PageTitle>
+
+<div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-4">
+    <div class="d-flex align-center gap-3">
+        <MudText Typo="Typo.h5">Notificações</MudText>
+        <MudSwitch T="bool" Value="_somenteNaoLidas" ValueChanged="@(async v => { _somenteNaoLidas = v; _pagina = 1; await Carregar(); })"
+                   Color="Color.Primary" Label="@($"Somente não lidas ({_naoLidas})")" />
+    </div>
+    @if (_naoLidas > 0)
+    {
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                   OnClick="MarcarTodasLidas">
+            Marcar todas como lidas
+        </MudButton>
+    }
+</div>
+
+@if (!_notificacoes.Any())
+{
+    <MudAlert Severity="Severity.Info">Nenhuma notificação.</MudAlert>
+}
+else
+{
+    <MudList T="Notificacao">
+        @foreach (var n in _notificacoes)
+        {
+            <MudListItem>
+                <MudPaper Class="@($"pa-3 mb-2 {(n.Lida ? "" : "mud-border-left")}")"
+                          Style="@(n.Lida ? "" : "border-left: 3px solid var(--mud-palette-primary);")"
+                          Elevation="n.Lida ? 0 : 1">
+                    <div class="d-flex align-center justify-space-between">
+                        <div>
+                            <MudText Typo="Typo.body1" Class="@(n.Lida ? "" : "font-weight-bold")">
+                                @n.Mensagem
+                            </MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @n.CriadoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                            </MudText>
+                        </div>
+                        <div class="d-flex gap-1">
+                            @if (n.CartaoOrigemId.HasValue)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                               Size="Size.Small"
+                                               OnClick="@(() => AbrirCartao(n))" />
+                            }
+                            @if (!n.Lida)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.DoneAll"
+                                               Size="Size.Small" Color="Color.Primary"
+                                               OnClick="@(() => MarcarLida(n))" />
+                            }
+                        </div>
+                    </div>
+                </MudPaper>
+            </MudListItem>
+        }
+    </MudList>
+    @if (TotalPaginas > 1)
+    {
+        <div class="d-flex justify-center mt-2">
+            <MudPagination Count="TotalPaginas" Selected="_pagina" SelectedChanged="@(async p => { _pagina = p; await Carregar(); })" Color="Color.Primary" BoundaryCount="1" MiddleCount="3" />
+        </div>
+    }
+}
+
+@code {
+    List<Notificacao> _notificacoes = [];
+    int _total;
+    int _naoLidas;
+    int _pagina = 1;
+    bool _somenteNaoLidas;
+
+    int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+    int TotalPaginas => (int)Math.Ceiling(_total / (double)ItensPorPagina);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Publicador.NotificacoesAlteradas += AoAlterarNotificacoes;
+        await Carregar();
+    }
+
+    private void AoAlterarNotificacoes(IReadOnlyCollection<int> destinatarios)
+    {
+        if (!destinatarios.Contains(UsuarioProvider.ObterIdUsuarioAtual())) return;
+        _ = InvokeAsync(async () =>
+        {
+            await Carregar();
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose() => Publicador.NotificacoesAlteradas -= AoAlterarNotificacoes;
+
+    async Task Carregar()
+    {
+        var uid = UsuarioProvider.ObterIdUsuarioAtual();
+        var consulta = Db.Notificacoes.AsNoTracking().Where(n => n.DestinatarioId == uid);
+        _naoLidas = await consulta.CountAsync(n => !n.Lida);
+        if (_somenteNaoLidas) consulta = consulta.Where(n => !n.Lida);
+        _total = await consulta.CountAsync();
+        if (_pagina > Math.Max(1, TotalPaginas)) _pagina = Math.Max(1, TotalPaginas);
+        _notificacoes = await consulta
+            .OrderByDescending(n => n.CriadoEm).ThenByDescending(n => n.Id)
+            .Skip((_pagina - 1) * ItensPorPagina).Take(ItensPorPagina)
+            .ToListAsync();
+    }
+
+    async Task MarcarLida(Notificacao n)
+    {
+        var existente = await Db.Notificacoes.FindAsync(n.Id);
+        if (existente is null) return;
+        existente.Lida = true;
+        existente.LidaEm = DateTime.UtcNow;
+        await Db.SaveChangesAsync();
+        await Carregar();
+    }
+
+    async Task MarcarTodasLidas()
+    {
+        var uid = UsuarioProvider.ObterIdUsuarioAtual();
+        var pendentes = await Db.Notificacoes
+            .Where(n => n.DestinatarioId == uid && !n.Lida)
+            .ToListAsync();
+        foreach (var n in pendentes)
+        {
+            n.Lida = true;
+            n.LidaEm = DateTime.UtcNow;
+        }
+        await Db.SaveChangesAsync();
+        await Carregar();
+        Snackbar.Add("Todas marcadas como lidas.", Severity.Success);
+    }
+
+    async Task AbrirCartao(Notificacao n)
+    {
+        if (!n.CartaoOrigemId.HasValue) return;
+        if (!n.Lida) await MarcarLida(n);
+        await Dialog.ShowAsync<Shared.DialogDetalhesCartao>("Detalhes do cartão",
+            new DialogParameters<Shared.DialogDetalhesCartao> { { x => x.CartaoId, n.CartaoOrigemId.Value } },
+            new DialogOptions { FullScreen = true, CloseButton = true });
+    }
+}

@@ -1,0 +1,130 @@
+@page "/"
+@inject PortalService Portal
+@inject SessaoUsuario Sessao
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Minhas solicitações</PageTitle>
+
+<div class="d-flex align-center flex-wrap gap-2 mb-4">
+    <MudText Typo="Typo.h5">Minhas solicitações</MudText>
+    <MudSpacer />
+    <MudButton Href="/nova" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add">Nova solicitação</MudButton>
+</div>
+
+@if (!_config.Configurado)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-4">
+        O portal ainda não foi configurado para receber novas solicitações. O administrador define o quadro e a lista de entrada em Parametrização › Portal.
+    </MudAlert>
+}
+
+<MudPaper Class="pa-3 mb-3" Elevation="0" Outlined="true">
+    <div class="d-flex flex-wrap gap-3 align-center">
+        <MudTextField T="string" Value="_busca" ValueChanged="@(v => { _busca = v; _pagina = 1; })" Immediate="true" DebounceInterval="250"
+                      Placeholder="Buscar por código ou título" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Clearable="true" Style="min-width:260px" Class="flex-grow-1" />
+        <MudSelect T="string" Value="_status" ValueChanged="@(v => { _status = v; _pagina = 1; })" Label="Status" Clearable="true" Style="max-width:240px">
+            @foreach (var status in _todas.Select(s => s.Status).Distinct().Order())
+            {
+                <MudSelectItem Value="@status">@status</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSwitch T="bool" Value="_ocultarConcluidas" ValueChanged="@(v => { _ocultarConcluidas = v; _pagina = 1; })" Color="Color.Primary" Label="Ocultar concluídas" />
+    </div>
+</MudPaper>
+
+@if (_carregando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_todas.Count == 0)
+{
+    <MudPaper Class="pa-8 d-flex flex-column align-center" Elevation="0" Outlined="true">
+        <MudIcon Icon="@Icons.Material.Outlined.Inbox" Size="Size.Large" Color="Color.Default" />
+        <MudText Class="mt-2">Você ainda não abriu nenhuma solicitação.</MudText>
+    </MudPaper>
+}
+else
+{
+    var filtradas = Filtradas().ToList();
+    var totalPaginas = Math.Max(1, (int)Math.Ceiling(filtradas.Count / (double)TamanhoPagina));
+    <MudTable Items="@filtradas.Skip((_pagina - 1) * TamanhoPagina).Take(TamanhoPagina)" Hover="true" Elevation="0" Outlined="true"
+              RowClass="portal-linha" OnRowClick="@((TableRowClickEventArgs<ResumoSolicitacao> e) => Nav.NavigateTo($"/solicitacoes/{e.Item!.Id}"))">
+        <HeaderContent>
+            <MudTh>Código</MudTh>
+            <MudTh>Título</MudTh>
+            <MudTh>Tipo</MudTh>
+            <MudTh>Status</MudTh>
+            <MudTh>Aberta em</MudTh>
+            <MudTh>Última atualização</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Código"><MudText Typo="Typo.body2" Style="font-family:monospace">@context.Codigo</MudText></MudTd>
+            <MudTd DataLabel="Título">@context.Titulo</MudTd>
+            <MudTd DataLabel="Tipo">@(context.Tipo ?? "—")</MudTd>
+            <MudTd DataLabel="Status">
+                <MudChip T="string" Size="Size.Small" Color="@(context.Concluida ? Color.Success : Color.Info)" Variant="Variant.Outlined"
+                         Icon="@(context.Concluida ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Schedule)">@context.Status</MudChip>
+            </MudTd>
+            <MudTd DataLabel="Aberta em">@context.CriadaEm.ToLocalTime().ToString("dd/MM/yyyy")</MudTd>
+            <MudTd DataLabel="Última atualização">@context.AtualizadaEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-4">Nenhuma solicitação com esses filtros.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+    @if (totalPaginas > 1)
+    {
+        <div class="d-flex justify-center mt-3">
+            <MudPagination Count="totalPaginas" Selected="_pagina" SelectedChanged="@(p => _pagina = p)" Color="Color.Primary" />
+        </div>
+    }
+}
+
+@code {
+    private const int TamanhoPagina = 15;
+    private ConfiguracaoDoPortal _config = default!;
+    private List<ResumoSolicitacao> _todas = [];
+    private string? _busca;
+    private string? _status;
+    private bool _ocultarConcluidas;
+    private int _pagina = 1;
+    private bool _carregando = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _config = Portal.Configuracao;
+        Sessao.OnChange += AoTrocarUsuario;
+        await CarregarAsync();
+    }
+
+    private async Task CarregarAsync()
+    {
+        _carregando = true;
+        _todas = Sessao.UsuarioId is int id ? await Portal.ListarAsync(id) : [];
+        _pagina = 1;
+        _carregando = false;
+    }
+
+    private IEnumerable<ResumoSolicitacao> Filtradas()
+    {
+        var itens = _todas.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_busca))
+        {
+            var termo = _busca.Trim();
+            itens = itens.Where(s => s.Codigo.Contains(termo, StringComparison.OrdinalIgnoreCase) || s.Titulo.Contains(termo, StringComparison.OrdinalIgnoreCase));
+        }
+        if (!string.IsNullOrEmpty(_status)) itens = itens.Where(s => s.Status == _status);
+        if (_ocultarConcluidas) itens = itens.Where(s => !s.Concluida);
+        return itens;
+    }
+
+    private void AoTrocarUsuario() => _ = InvokeAsync(async () =>
+    {
+        await CarregarAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Sessao.OnChange -= AoTrocarUsuario;
+}

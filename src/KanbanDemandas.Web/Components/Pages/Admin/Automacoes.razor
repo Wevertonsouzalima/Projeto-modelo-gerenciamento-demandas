@@ -1,0 +1,421 @@
+@page "/admin/automacoes"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject IDialogService Dialog
+@inject ISnackbar Snackbar
+@inject MotorAutomacoes Motor
+@inject PublicadorAlteracoesTempoReal Publicador
+@inject IConfiguration Configuracao
+@inject IServiceScopeFactory ScopeFactory
+@implements IDisposable
+
+<PageTitle>Automações</PageTitle>
+
+<div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-2">
+    <div>
+        <MudText Typo="Typo.h5">Automações</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Cada regra tem <b>Quando</b> (gatilho), <b>Se</b> (condições) e <b>Então</b> (ações).
+            Alterações feitas por pessoas disparam as regras @(AtrasoMinutos == 0 ? "na hora" : $"{AtrasoMinutos} min depois da última alteração no cartão") (ajuste em Parametrização); gatilhos de tempo são verificados periodicamente.
+        </MudText>
+    </div>
+    <MudSelect T="int" Value="_quadroId" ValueChanged="SelecionarQuadro" ToStringFunc="@(id => _quadros.FirstOrDefault(q => q.Id == id)?.Nome)" Label="Quadro" Style="min-width:240px">
+        @foreach (var quadro in _quadros)
+        {
+            <MudSelectItem Value="@quadro.Id">@quadro.Nome</MudSelectItem>
+        }
+    </MudSelect>
+</div>
+
+@if (_foto is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pt-4">
+        <MudTabPanel Text="Regras" Icon="@Icons.Material.Filled.AutoMode" BadgeData="@(_regras.Count > 0 ? _regras.Count : null)">
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="@(() => AbrirEditor(null, null))">Nova regra</MudButton>
+                <MudMenu Label="Modelos prontos" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.AutoAwesome" EndIcon="@Icons.Material.Filled.KeyboardArrowDown" MaxHeight="480">
+                    @foreach (var modelo in ModelosProntosAutomacao.Todos)
+                    {
+                        <MudMenuItem OnClick="@(() => AbrirEditor(null, modelo.Criar(_quadroId)))">
+                            <div>
+                                <MudText Typo="Typo.subtitle2">@modelo.Nome</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@modelo.Descricao</MudText>
+                            </div>
+                        </MudMenuItem>
+                    }
+                </MudMenu>
+            </div>
+
+            @if (_regras.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info">Nenhuma regra neste quadro. Comece por um modelo pronto ou crie uma nova.</MudAlert>
+            }
+            @foreach (var regra in _regras)
+            {
+                var estatistica = _estatisticas.GetValueOrDefault(regra.Id);
+                <MudPaper Class="pa-4 mb-3" Outlined="true" Style="@(regra.Ativa ? null : "opacity:0.65")">
+                    <div class="d-flex align-start justify-space-between gap-3 flex-wrap">
+                        <div style="min-width:0; flex:1">
+                            <div class="d-flex align-center gap-2 flex-wrap">
+                                <MudText Typo="Typo.h6">@regra.Nome</MudText>
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Icon="@(DescricaoAutomacao.EhGatilhoDeTempo(regra.Gatilho) ? Icons.Material.Filled.Schedule : Icons.Material.Filled.Bolt)">
+                                    @DescricaoAutomacao.NomeGatilho(regra.Gatilho)
+                                </MudChip>
+                                @if (!regra.Ativa)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Default">Pausada</MudChip>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(regra.Descricao))
+                            {
+                                <MudText Typo="Typo.body2" Class="mud-text-secondary">@regra.Descricao</MudText>
+                            }
+                            <MudText Typo="Typo.body2" Class="mt-2">@DescricaoAutomacao.Regra(regra, _foto)</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary mt-1">
+                                @(estatistica.Total == 0 ? "Ainda não executou." : $"{estatistica.Total} execução(ões) nos últimos 7 dias")@(estatistica.Erros > 0 ? $" · {estatistica.Erros} com erro" : "")@(regra.UltimaExecucaoEm.HasValue ? $" · última em {regra.UltimaExecucaoEm.Value.ToLocalTime():dd/MM/yyyy HH:mm}" : "")
+                            </MudText>
+                        </div>
+                        <div class="d-flex align-center gap-1">
+                            <MudTooltip Text="@(regra.Ativa ? "Pausar regra" : "Ativar regra")">
+                                <MudSwitch T="bool" Value="regra.Ativa" ValueChanged="@(v => AlternarAtiva(regra, v))" Color="Color.Success" />
+                            </MudTooltip>
+                            <MudTooltip Text="Simular (ver o que aconteceria agora)">
+                                <MudIconButton Icon="@Icons.Material.Filled.Science" OnClick="@(() => Simular(regra))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Editar">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" OnClick="@(() => AbrirEditor(regra.Id, null))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Duplicar">
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" OnClick="@(() => Duplicar(regra))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Ver histórico desta regra">
+                                <MudIconButton Icon="@Icons.Material.Filled.History" OnClick="@(() => FiltrarHistorico(regra.Id))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Excluir">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="@(() => Excluir(regra))" />
+                            </MudTooltip>
+                        </div>
+                    </div>
+                </MudPaper>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="Histórico" Icon="@Icons.Material.Filled.History">
+            <div class="d-flex flex-wrap gap-3 mb-3 align-center">
+                <MudSelect T="int?" Value="_filtroRegraId" ValueChanged="@(async id => { _filtroRegraId = id; await CarregarHistorico(); })" Label="Regra" Clearable="true" Style="min-width:240px"
+                           ToStringFunc="@(id => _regras.FirstOrDefault(r => r.Id == id)?.Nome)">
+                    @foreach (var regra in _regras)
+                    {
+                        <MudSelectItem Value="@((int?)regra.Id)">@regra.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudCheckBox T="bool" Value="_somenteErros" ValueChanged="@(async v => { _somenteErros = v; await CarregarHistorico(); })" Label="Somente com erro" />
+                <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh" OnClick="CarregarHistorico">Atualizar</MudButton>
+            </div>
+            <MudTable T="ExecucaoAutomacao" @ref="_tabelaHistorico" ServerData="CarregarPaginaHistorico" Dense="true" Hover="true" Striped="true" Breakpoint="Breakpoint.Sm" RowsPerPage="@ItensPorPagina">
+                <HeaderContent>
+                    <MudTh>Quando</MudTh><MudTh>Regra</MudTh><MudTh>Cartão</MudTh><MudTh>Resultado</MudTh><MudTh>O que foi feito</MudTh><MudTh></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.OcorridoEm.ToLocalTime().ToString("dd/MM HH:mm")</MudTd>
+                    <MudTd>@context.RegraAutomacao.Nome</MudTd>
+                    <MudTd>@(context.Cartao?.Titulo ?? "Quadro")</MudTd>
+                    <MudTd><MudChip T="string" Size="Size.Small" Color="@CorStatus(context.Status)">@NomeStatus(context.Status)</MudChip></MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2">@context.Resumo</MudText>
+                        @if (!string.IsNullOrWhiteSpace(context.Erro))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Error">@context.Erro</MudText>
+                        }
+                        @if (context.EmailsEnviados > 0)
+                        {
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">@context.EmailsEnviados e-mail(s)</MudText>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        @if (context.DesfazerJson is not null && context.DesfeitaEm is null)
+                        {
+                            <MudTooltip Text="Desfazer as alterações desta execução (notificações e e-mails já enviados não voltam)">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Undo" OnClick="@(() => Desfazer(context))">Desfazer</MudButton>
+                            </MudTooltip>
+                        }
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent><MudText Class="mud-text-secondary">Nenhuma execução registrada.</MudText></NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Na fila" Icon="@Icons.Material.Filled.HourglassTop" BadgeData="@(_pendentes.Count > 0 ? _pendentes.Count : null)">
+            <MudText Typo="Typo.body2" Class="mb-3 mud-text-secondary">
+                Eventos aguardando a espera de @AtrasoMinutos min. Cada nova alteração no cartão reinicia a contagem; na hora de executar,
+                o sistema confere se a situação ainda vale (ex.: o cartão continua na lista em que entrou).
+            </MudText>
+            <MudTable Items="_pendentes" Dense="true" Hover="true" Striped="true" RowsPerPage="@ItensPorPagina">
+                <HeaderContent><MudTh>Cartão</MudTh><MudTh>Evento</MudTh><MudTh>Executa em</MudTh><MudTh></MudTh></HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Titulo</MudTd>
+                    <MudTd>@DescricaoAutomacao.NomeGatilho(context.Evento.Gatilho)@(context.Evento.ListaId.HasValue ? $" — {_foto?.NomeLista(context.Evento.ListaId.Value)}" : "")</MudTd>
+                    <MudTd>@context.Evento.ExecutarEm.ToLocalTime().ToString("dd/MM HH:mm")</MudTd>
+                    <MudTd>
+                        <MudTooltip Text="Executar no próximo ciclo"><MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" OnClick="@(() => AntecipaPendente(context.Evento))" /></MudTooltip>
+                        <MudTooltip Text="Descartar"><MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => DescartarPendente(context.Evento))" /></MudTooltip>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent><MudText Class="mud-text-secondary">Nenhum evento aguardando.</MudText></NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Sugestões" Icon="@Icons.Material.Filled.Lightbulb" BadgeData="@(_sugestoes.Count > 0 ? _sugestoes.Count : null)" BadgeColor="Color.Warning">
+            @if (_sugestoes.Count == 0)
+            {
+                <MudAlert Severity="Severity.Success">Nenhuma sugestão pendente.</MudAlert>
+            }
+            @foreach (var sugestao in _sugestoes)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-2 d-flex align-center justify-space-between gap-3 flex-wrap">
+                    <div>
+                        <MudText Typo="Typo.subtitle2">@sugestao.Cartao.Titulo</MudText>
+                        <MudText Typo="Typo.body2">@sugestao.Descricao</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Regra "@sugestao.RegraAutomacao.Nome" · @sugestao.CriadoEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</MudText>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => DecidirSugestao(sugestao, false))">Rejeitar</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => DecidirSugestao(sugestao, true))">Aprovar</MudButton>
+                    </div>
+                </MudPaper>
+            }
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    private List<Quadro> _quadros = [];
+    private int _quadroId;
+    private FotoQuadro? _foto;
+    private List<RegraAutomacao> _regras = [];
+    private Dictionary<int, (int Total, int Erros)> _estatisticas = [];
+    private MudTable<ExecucaoAutomacao>? _tabelaHistorico;
+    private List<SugestaoAutomacao> _sugestoes = [];
+    private int? _filtroRegraId;
+    private List<(EventoAutomacaoPendente Evento, string Titulo)> _pendentes = [];
+
+    private int AtrasoMinutos => Math.Max(0, Configuracao.GetValue("Automacao:AtrasoMinutos", 10));
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+    private bool _somenteErros;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _quadros = await Db.Quadros.AsNoTracking().Where(q => !q.Excluido).OrderBy(q => q.Nome).ToListAsync();
+        Publicador.NotificacoesAlteradas += AoAlterar;
+        if (_quadros.Count > 0) await SelecionarQuadro(_quadros[0].Id);
+    }
+
+    // Execuções em segundo plano geram notificações; aproveita o aviso para atualizar histórico e sugestões.
+    private void AoAlterar(IReadOnlyCollection<int> destinatarios) => _ = InvokeAsync(async () =>
+    {
+        if (_quadroId == 0) return;
+        await CarregarHistorico();
+        await CarregarSugestoes();
+        await CarregarPendentes();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Publicador.NotificacoesAlteradas -= AoAlterar;
+
+    private async Task SelecionarQuadro(int quadroId)
+    {
+        _quadroId = quadroId;
+        _filtroRegraId = null;
+        _foto = await FotoQuadro.CarregarAsync(Db, quadroId);
+        await CarregarRegras();
+        await CarregarHistorico();
+        await CarregarSugestoes();
+        await CarregarPendentes();
+    }
+
+    private async Task CarregarPendentes()
+    {
+        var idsCartoes = _foto?.Cartoes.Select(c => c.Id).ToList() ?? [];
+        var pendentes = await Db.EventosAutomacaoPendentes.AsNoTracking().Where(p => idsCartoes.Contains(p.CartaoId)).OrderBy(p => p.ExecutarEm).ToListAsync();
+        _pendentes = pendentes.Select(p => (p, _foto!.Cartao(p.CartaoId)?.Titulo ?? $"#{p.CartaoId}")).ToList();
+    }
+
+    private async Task AntecipaPendente(EventoAutomacaoPendente evento)
+    {
+        var entidade = await Db.EventosAutomacaoPendentes.FirstOrDefaultAsync(p => p.Id == evento.Id);
+        if (entidade is null) return;
+        entidade.ExecutarEm = DateTime.UtcNow;
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Será executado no próximo ciclo de verificação.", Severity.Info);
+        await CarregarPendentes();
+    }
+
+    private async Task DescartarPendente(EventoAutomacaoPendente evento)
+    {
+        var entidade = await Db.EventosAutomacaoPendentes.FirstOrDefaultAsync(p => p.Id == evento.Id);
+        if (entidade is null) return;
+        Db.EventosAutomacaoPendentes.Remove(entidade);
+        await Db.SaveChangesAsync();
+        await CarregarPendentes();
+    }
+
+    private async Task CarregarRegras()
+    {
+        Db.ChangeTracker.Clear();
+        _regras = await Db.RegrasAutomacao.AsNoTracking().Include(r => r.Acoes)
+            .Where(r => r.QuadroId == _quadroId).OrderBy(r => r.Nome).ToListAsync();
+        var desde = DateTime.UtcNow.AddDays(-7);
+        _estatisticas = (await Db.ExecucoesAutomacao.AsNoTracking()
+                .Where(e => e.QuadroId == _quadroId && e.OcorridoEm >= desde)
+                .GroupBy(e => e.RegraAutomacaoId)
+                .Select(g => new { g.Key, Total = g.Count(), Erros = g.Count(e => e.Status == StatusExecucaoAutomacao.Erro || e.Status == StatusExecucaoAutomacao.Parcial) })
+                .ToListAsync())
+            .ToDictionary(x => x.Key, x => (x.Total, x.Erros));
+    }
+
+    private async Task CarregarHistorico()
+    {
+        if (_tabelaHistorico is not null) await _tabelaHistorico.ReloadServerData();
+    }
+
+    // Paginação no servidor: o histórico cresce indefinidamente, então só a página exibida é lida.
+    private async Task<TableData<ExecucaoAutomacao>> CarregarPaginaHistorico(TableState estado, CancellationToken ct)
+    {
+        using var escopo = ScopeFactory.CreateScope();
+        var db = escopo.ServiceProvider.GetRequiredService<KanbanDbContext>();
+        var consulta = db.ExecucoesAutomacao.AsNoTracking().Where(e => e.QuadroId == _quadroId);
+        if (_filtroRegraId.HasValue) consulta = consulta.Where(e => e.RegraAutomacaoId == _filtroRegraId);
+        if (_somenteErros) consulta = consulta.Where(e => e.Status == StatusExecucaoAutomacao.Erro || e.Status == StatusExecucaoAutomacao.Parcial);
+        var total = await consulta.CountAsync(ct);
+        var itens = await consulta.Include(e => e.RegraAutomacao).Include(e => e.Cartao)
+            .OrderByDescending(e => e.Id).Skip(estado.Page * estado.PageSize).Take(estado.PageSize).ToListAsync(ct);
+        return new TableData<ExecucaoAutomacao> { TotalItems = total, Items = itens };
+    }
+
+    private async Task CarregarSugestoes()
+        => _sugestoes = await Db.SugestoesAutomacao.AsNoTracking().Include(s => s.Cartao).Include(s => s.RegraAutomacao)
+            .Where(s => s.QuadroId == _quadroId && s.Status == StatusSugestao.Pendente && !s.Cartao.Excluido)
+            .OrderByDescending(s => s.CriadoEm).ToListAsync();
+
+    private async Task AbrirEditor(int? regraId, RegraAutomacao? modelo)
+    {
+        var referencia = await Dialog.ShowAsync<Shared.DialogRegraAutomacao>(regraId.HasValue ? "Editar regra" : "Nova regra",
+            new DialogParameters<Shared.DialogRegraAutomacao> { { x => x.QuadroId, _quadroId }, { x => x.RegraId, regraId }, { x => x.Modelo, modelo } },
+            new DialogOptions { FullScreen = true, CloseButton = true });
+        var resultado = await referencia.Result;
+        if (resultado is { Canceled: false }) await CarregarRegras();
+    }
+
+    private async Task Duplicar(RegraAutomacao regra)
+    {
+        var copia = new RegraAutomacao
+        {
+            QuadroId = regra.QuadroId, Nome = $"{regra.Nome} (cópia)", Descricao = regra.Descricao, Gatilho = regra.Gatilho, ListaId = regra.ListaId,
+            ParametrosGatilhoJson = regra.ParametrosGatilhoJson, CondicoesJson = regra.CondicoesJson,
+            ExigirTodasCondicoes = regra.ExigirTodasCondicoes, SomenteHorarioComercial = regra.SomenteHorarioComercial
+        };
+        foreach (var acao in regra.Acoes.Where(a => !a.Excluido))
+            copia.Acoes.Add(new AcaoAutomacao { Tipo = acao.Tipo, Ordem = acao.Ordem, ParametrosJson = acao.ParametrosJson });
+        await AbrirEditor(null, copia);
+    }
+
+    private async Task Simular(RegraAutomacao regra)
+    {
+        var referencia = await Dialog.ShowAsync<Shared.DialogSimulacaoAutomacao>($"Simulação: {regra.Nome}",
+            new DialogParameters<Shared.DialogSimulacaoAutomacao> { { x => x.RegraId, regra.Id } },
+            new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true });
+        var resultado = await referencia.Result;
+        if (resultado is { Canceled: false, Data: true })
+        {
+            await CarregarRegras();
+            await CarregarHistorico();
+            await CarregarSugestoes();
+        }
+    }
+
+    private async Task FiltrarHistorico(int regraId)
+    {
+        _filtroRegraId = regraId;
+        await CarregarHistorico();
+        Snackbar.Add("Histórico filtrado por esta regra (aba Histórico).", Severity.Info);
+    }
+
+    private async Task AlternarAtiva(RegraAutomacao regra, bool ativa)
+    {
+        var entidade = await Db.RegrasAutomacao.FirstOrDefaultAsync(r => r.Id == regra.Id);
+        if (entidade is null) return;
+        entidade.Ativa = ativa;
+        await Db.SaveChangesAsync();
+        regra.Ativa = ativa;
+    }
+
+    private async Task Excluir(RegraAutomacao regra)
+    {
+        var confirmado = await Dialog.ShowMessageBox("Excluir regra", $"Excluir a regra \"{regra.Nome}\"? O histórico de execuções é mantido.", yesText: "Excluir", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        var entidade = await Db.RegrasAutomacao.FirstOrDefaultAsync(r => r.Id == regra.Id);
+        if (entidade is null) return;
+        entidade.Excluido = true;
+        entidade.ExcluidoEm = DateTime.UtcNow;
+        entidade.ExcluidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        await CarregarRegras();
+    }
+
+    private async Task Desfazer(ExecucaoAutomacao execucao)
+    {
+        var confirmado = await Dialog.ShowMessageBox("Desfazer execução",
+            $"Reverter o que a regra \"{execucao.RegraAutomacao.Nome}\" fez? Notificações e e-mails já enviados não voltam.", yesText: "Desfazer", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        try
+        {
+            await Motor.DesfazerAsync(execucao.Id, UsuarioProvider.ObterIdUsuarioAtual());
+            Snackbar.Add("Execução desfeita.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Não foi possível desfazer: {ex.Message}", Severity.Error);
+        }
+        await CarregarHistorico();
+    }
+
+    private async Task DecidirSugestao(SugestaoAutomacao sugestao, bool aprovar)
+    {
+        try
+        {
+            if (aprovar) await Motor.AprovarSugestaoAsync(sugestao.Id, UsuarioProvider.ObterIdUsuarioAtual());
+            else await Motor.RejeitarSugestaoAsync(sugestao.Id, UsuarioProvider.ObterIdUsuarioAtual());
+            Snackbar.Add(aprovar ? "Sugestão aplicada." : "Sugestão rejeitada.", aprovar ? Severity.Success : Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Não foi possível aplicar: {ex.Message}", Severity.Error);
+        }
+        await CarregarSugestoes();
+        await CarregarHistorico();
+    }
+
+    private static Color CorStatus(StatusExecucaoAutomacao status) => status switch
+    {
+        StatusExecucaoAutomacao.Sucesso => Color.Success,
+        StatusExecucaoAutomacao.Parcial => Color.Warning,
+        StatusExecucaoAutomacao.Erro => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string NomeStatus(StatusExecucaoAutomacao status) => status switch
+    {
+        StatusExecucaoAutomacao.Sucesso => "Sucesso",
+        StatusExecucaoAutomacao.Parcial => "Parcial",
+        StatusExecucaoAutomacao.Erro => "Erro",
+        StatusExecucaoAutomacao.Desfeita => "Desfeita",
+        _ => status.ToString()
+    };
+}

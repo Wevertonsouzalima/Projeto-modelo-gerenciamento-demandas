@@ -1,0 +1,702 @@
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+@inject MensagemTeams Teams
+
+<MudDialog>
+    <DialogContent>
+        @if (_foto is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info" Icon="@Icons.Material.Filled.AutoMode" Class="mb-4">@Resumo</MudAlert>
+
+            <MudGrid>
+                <MudItem xs="12" md="8">
+                    <MudTextField @bind-Value="_nome" Label="Nome da regra" Required="true" MaxLength="200" />
+                </MudItem>
+                <MudItem xs="12" md="4" Class="d-flex align-center">
+                    <MudSwitch T="bool" @bind-Value="_ativa" Color="Color.Success" Label="Regra ativa" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_descricao" Label="Descrição (opcional)" MaxLength="1000" />
+                </MudItem>
+            </MudGrid>
+
+            @* ───── 1. QUANDO ───── *@
+            <MudPaper Outlined="true" Class="pa-4 mt-4">
+                <MudText Typo="Typo.h6"><MudIcon Icon="@Icons.Material.Filled.Bolt" Class="mr-1" /> 1. Quando</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">O evento que dispara a regra.</MudText>
+                <MudGrid Class="mt-1">
+                    <MudItem xs="12" md="5">
+                        <MudSelect T="TipoGatilho" Value="_gatilho" ValueChanged="AlterarGatilho" Label="Gatilho" ToStringFunc="@(g => DescricaoAutomacao.NomeGatilho(g))">
+                            <MudSelectItem Value="@((TipoGatilho)0)" Disabled="true">— Eventos (na hora) —</MudSelectItem>
+                            @foreach (var g in Enum.GetValues<TipoGatilho>().Where(g => !DescricaoAutomacao.EhGatilhoDeTempo(g)))
+                            {
+                                <MudSelectItem Value="@g">@DescricaoAutomacao.NomeGatilho(g)</MudSelectItem>
+                            }
+                            <MudSelectItem Value="@((TipoGatilho)19)" Disabled="true">— Tempo (verificados a cada minuto) —</MudSelectItem>
+                            @foreach (var g in Enum.GetValues<TipoGatilho>().Where(DescricaoAutomacao.EhGatilhoDeTempo))
+                            {
+                                <MudSelectItem Value="@g">@DescricaoAutomacao.NomeGatilho(g)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    @if (_gatilho is TipoGatilho.CartaoEntrouNaLista or TipoGatilho.CartaoSaiuDaLista or TipoGatilho.ParadoNaLista)
+                    {
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="int?" @bind-Value="_listaId" Label="Lista" Clearable="true" Placeholder="Qualquer lista"
+                                       ToStringFunc="@(id => id.HasValue ? _foto.NomeLista(id.Value) : "Qualquer lista")">
+                                @foreach (var lista in ListasEmOrdem)
+                                {
+                                    <MudSelectItem Value="@((int?)lista.Id)">@_foto.NomeLista(lista.Id)</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                    }
+                    @if (_gatilho == TipoGatilho.CampoAlterado)
+                    {
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="CampoMonitorado" @bind-Value="_parametrosGatilho.Campo" Label="Campo" ToStringFunc="@(c => DescricaoAutomacao.NomeCampo(c))">
+                                @foreach (var campo in Enum.GetValues<CampoMonitorado>())
+                                {
+                                    <MudSelectItem Value="@campo">@DescricaoAutomacao.NomeCampo(campo)</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                    }
+                    @if (_gatilho is TipoGatilho.PrazoProximo or TipoGatilho.ParadoNaLista or TipoGatilho.SprintEncerrando or TipoGatilho.PrazoVencido)
+                    {
+                        <MudItem xs="12" md="3">
+                            <MudNumericField T="int" @bind-Value="_parametrosGatilho.Dias" Min="0" Max="365"
+                                             Label="@(_gatilho switch { TipoGatilho.PrazoProximo => "Dias antes do prazo", TipoGatilho.ParadoNaLista => "Dias parado", TipoGatilho.SprintEncerrando => "Dias antes do fim", _ => "Repetir a cada (dias, 0 = uma vez)" })" />
+                        </MudItem>
+                    }
+                    @if (_gatilho == TipoGatilho.Agendado)
+                    {
+                        <MudItem xs="12" md="2">
+                            <MudTimePicker Label="Horário" Time="@HorarioAgendado" TimeChanged="@(t => _parametrosGatilho.Horario = t?.ToString(@"hh\:mm") ?? "08:00")" />
+                        </MudItem>
+                        <MudItem xs="12">
+                            <MudChipSet T="DayOfWeek" SelectionMode="SelectionMode.MultiSelection" SelectedValues="_parametrosGatilho.DiasSemana"
+                                        SelectedValuesChanged="@(dias => _parametrosGatilho.DiasSemana = dias.ToList())" CheckMark="true" Variant="Variant.Outlined" Color="Color.Primary">
+                                @foreach (var dia in DiasDaSemana)
+                                {
+                                    <MudChip Value="@dia" Text="@NomeDia(dia)" />
+                                }
+                            </MudChipSet>
+                        </MudItem>
+                    }
+                </MudGrid>
+                <MudText Typo="Typo.body2" Class="mt-2 mud-text-secondary">@DescricaoAutomacao.AjudaGatilho(_gatilho)</MudText>
+                @if (DescricaoAutomacao.EhGatilhoDeTempo(_gatilho))
+                {
+                    <MudSwitch T="bool" @bind-Value="_somenteHorarioComercial" Color="Color.Primary" Class="mt-1"
+                               Label="Só executar em dias úteis, no horário comercial" />
+                }
+            </MudPaper>
+
+            @* ───── 2. SE ───── *@
+            <MudPaper Outlined="true" Class="pa-4 mt-4">
+                <div class="d-flex align-center justify-space-between flex-wrap gap-2">
+                    <div>
+                        <MudText Typo="Typo.h6"><MudIcon Icon="@Icons.Material.Filled.FilterAlt" Class="mr-1" /> 2. Se (condições opcionais)</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">A regra só age nos cartões que atendem às condições. Sem condições, age em todos.</MudText>
+                    </div>
+                    @if (_condicoes.Count > 1)
+                    {
+                        <MudToggleGroup T="bool" @bind-Value="_exigirTodas" Outlined="true" Size="Size.Small" Color="Color.Primary">
+                            <MudToggleItem Value="true" Text="Todas (E)" />
+                            <MudToggleItem Value="false" Text="Qualquer uma (OU)" />
+                        </MudToggleGroup>
+                    }
+                </div>
+                @foreach (var condicao in _condicoes)
+                {
+                    var c = condicao;
+                    <div class="regra-linha mt-3">
+                        <MudSelect T="TipoCondicao" Value="c.Tipo" ValueChanged="@(t => AlterarTipoCondicao(c, t))" Label="Condição" Dense="true" Class="regra-campo-md"
+                                   ToStringFunc="@(t => DescricaoAutomacao.NomeCondicao(t))">
+                            @foreach (var tipo in Enum.GetValues<TipoCondicao>())
+                            {
+                                <MudSelectItem Value="@tipo">@DescricaoAutomacao.NomeCondicao(tipo)</MudSelectItem>
+                            }
+                        </MudSelect>
+                        @if (c.Tipo == TipoCondicao.CampoPersonalizado)
+                        {
+                            <MudSelect T="string" @bind-Value="c.CampoNome" Label="Campo" Dense="true" Class="regra-campo-md">
+                                @foreach (var nome in NomesCampos)
+                                {
+                                    <MudSelectItem Value="@nome">@nome</MudSelectItem>
+                                }
+                            </MudSelect>
+                        }
+                        <MudSelect T="OperadorCondicao" @bind-Value="c.Operador" Label="Operador" Dense="true" Class="regra-campo-sm"
+                                   ToStringFunc="@(o => DescricaoAutomacao.NomeOperador(o))">
+                            @foreach (var op in DescricaoAutomacao.OperadoresPara(c.Tipo))
+                            {
+                                <MudSelectItem Value="@op">@DescricaoAutomacao.NomeOperador(op)</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <div class="regra-campo-lg">
+                            @if (PrecisaDeIds(c))
+                            {
+                                <MultiSelecaoFiltro Opcoes="@OpcoesCondicao(c.Tipo)" Selecionados="c.Ids" SelecionadosChanged="@(ids => c.Ids = ids.ToList())" />
+                            }
+                            else if (PrecisaDeNumero(c))
+                            {
+                                <MudNumericField T="decimal?" @bind-Value="c.Numero" Label="Valor" Margin="Margin.Dense" />
+                            }
+                            else if (PrecisaDeTexto(c))
+                            {
+                                <MudTextField @bind-Value="c.Texto" Label="@(c.Tipo == TipoCondicao.CampoPersonalizado ? "Valor (datas como AAAA-MM-DD)" : "Texto")" Margin="Margin.Dense" />
+                            }
+                        </div>
+                        <MudTooltip Text="Remover condição">
+                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => _condicoes.Remove(c))" />
+                        </MudTooltip>
+                    </div>
+                }
+                <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" Class="mt-2" OnClick="AdicionarCondicao">Adicionar condição</MudButton>
+            </MudPaper>
+
+            @* ───── 3. ENTÃO ───── *@
+            <MudPaper Outlined="true" Class="pa-4 mt-4">
+                <MudText Typo="Typo.h6"><MudIcon Icon="@Icons.Material.Filled.PlayArrow" Class="mr-1" /> 3. Então</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Ações executadas na ordem. Se uma falhar, as demais continuam e o erro fica no histórico.</MudText>
+                @for (var i = 0; i < _acoes.Count; i++)
+                {
+                    var indice = i;
+                    var acao = _acoes[i];
+                    <MudPaper Outlined="true" Class="pa-3 mt-3 regra-acao">
+                        <div class="d-flex align-center gap-2">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary">@(indice + 1)</MudChip>
+                            <MudSelect T="TipoAcaoAutomacao" Value="acao.Tipo" ValueChanged="@(t => acao.Tipo = t)" Label="Ação" Dense="true" Class="flex-grow-1"
+                                       ToStringFunc="@(t => DescricaoAutomacao.NomeAcao(t))">
+                                @foreach (var tipo in Enum.GetValues<TipoAcaoAutomacao>())
+                                {
+                                    <MudSelectItem Value="@tipo">@DescricaoAutomacao.NomeAcao(tipo)</MudSelectItem>
+                                }
+                            </MudSelect>
+                            <MudTooltip Text="Subir"><MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" Disabled="@(indice == 0)" OnClick="@(() => MoverAcao(indice, -1))" /></MudTooltip>
+                            <MudTooltip Text="Descer"><MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" Disabled="@(indice == _acoes.Count - 1)" OnClick="@(() => MoverAcao(indice, 1))" /></MudTooltip>
+                            <MudTooltip Text="Remover ação"><MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => _acoes.RemoveAt(indice))" /></MudTooltip>
+                        </div>
+                        <div class="mt-2">@EditorAcao(acao)</div>
+                    </MudPaper>
+                }
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" Class="mt-3" OnClick="AdicionarAcao">Adicionar ação</MudButton>
+            </MudPaper>
+
+            <MudExpansionPanels Class="mt-4" Elevation="0">
+                <MudExpansionPanel Text="Marcadores disponíveis em textos, e-mails e alertas">
+                    <div class="d-flex flex-wrap gap-2">
+                        @foreach (var (marcador, descricao) in MarcadoresAutomacao.Disponiveis)
+                        {
+                            <MudTooltip Text="@descricao"><MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@marcador</MudChip></MudTooltip>
+                        }
+                    </div>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Cancel())">Cancelar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="Salvar">Salvar regra</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int QuadroId { get; set; }
+    [Parameter] public int? RegraId { get; set; }
+    [Parameter] public RegraAutomacao? Modelo { get; set; }
+
+    private sealed class AcaoEditavel
+    {
+        public TipoAcaoAutomacao Tipo { get; set; }
+        public ParametrosAcao P { get; set; } = new();
+    }
+
+    private FotoQuadro? _foto;
+    private string _nome = string.Empty;
+    private string? _descricao;
+    private bool _ativa = true;
+    private TipoGatilho _gatilho = TipoGatilho.CartaoEntrouNaLista;
+    private int? _listaId;
+    private ParametrosGatilho _parametrosGatilho = new();
+    private List<Condicao> _condicoes = [];
+    private bool _exigirTodas = true;
+    private bool _somenteHorarioComercial;
+    private List<AcaoEditavel> _acoes = [];
+
+    private static readonly DayOfWeek[] DiasDaSemana =
+        [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _foto = await FotoQuadro.CarregarAsync(Db, QuadroId);
+        var origem = Modelo;
+        if (RegraId.HasValue)
+            origem = await Db.RegrasAutomacao.AsNoTracking().Include(r => r.Acoes).FirstOrDefaultAsync(r => r.Id == RegraId.Value);
+        if (origem is null)
+        {
+            _acoes.Add(new AcaoEditavel { Tipo = TipoAcaoAutomacao.NotificarResponsavel });
+            return;
+        }
+        _nome = origem.Nome; _descricao = origem.Descricao; _ativa = RegraId.HasValue ? origem.Ativa : true;
+        _gatilho = origem.Gatilho; _listaId = origem.ListaId;
+        _parametrosGatilho = JsonAutomacao.Ler<ParametrosGatilho>(origem.ParametrosGatilhoJson);
+        _condicoes = JsonAutomacao.Ler<List<Condicao>>(origem.CondicoesJson);
+        _exigirTodas = origem.ExigirTodasCondicoes;
+        _somenteHorarioComercial = origem.SomenteHorarioComercial;
+        _acoes = origem.Acoes.Where(a => !a.Excluido).OrderBy(a => a.Ordem)
+            .Select(a => new AcaoEditavel { Tipo = a.Tipo, P = JsonAutomacao.Ler<ParametrosAcao>(a.ParametrosJson) }).ToList();
+    }
+
+    private IEnumerable<Lista> ListasEmOrdem
+    {
+        get
+        {
+            var resultado = new List<Lista>();
+            void Visitar(int? pai)
+            {
+                foreach (var lista in _foto!.Listas.Where(l => l.ListaPaiId == pai).OrderBy(l => l.Ordem))
+                {
+                    resultado.Add(lista);
+                    Visitar(lista.Id);
+                }
+            }
+            Visitar(null);
+            return resultado;
+        }
+    }
+
+    private IEnumerable<Lista> ListasFolha => ListasEmOrdem.Where(l => !ListasQuadro.EhGrupo(l.Id, _foto!.Listas));
+
+    private IEnumerable<string> NomesCampos => _foto!.Listas.SelectMany(l => l.DefinicoesCampo)
+        .Select(d => d.Nome.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n);
+
+    private List<OpcaoSelecao> Usuarios => _foto!.Usuarios.Select(u => new OpcaoSelecao(u.Id, u.Nome)).ToList();
+
+    private TimeSpan? HorarioAgendado => TimeSpan.TryParse(_parametrosGatilho.Horario, out var h) ? h : new TimeSpan(8, 0, 0);
+
+    private static string NomeDia(DayOfWeek dia) => new System.Globalization.CultureInfo("pt-BR").DateTimeFormat.GetAbbreviatedDayName(dia);
+
+    private RegraAutomacao MontarRegra()
+    {
+        var regra = new RegraAutomacao
+        {
+            Id = RegraId ?? 0, QuadroId = QuadroId, Nome = _nome.Trim(), Descricao = string.IsNullOrWhiteSpace(_descricao) ? null : _descricao.Trim(),
+            Ativa = _ativa, Gatilho = _gatilho,
+            ListaId = _gatilho is TipoGatilho.CartaoEntrouNaLista or TipoGatilho.CartaoSaiuDaLista or TipoGatilho.ParadoNaLista ? _listaId : null,
+            ParametrosGatilhoJson = JsonAutomacao.Serializar(_parametrosGatilho),
+            CondicoesJson = _condicoes.Count == 0 ? null : JsonAutomacao.Serializar(_condicoes),
+            ExigirTodasCondicoes = _exigirTodas,
+            SomenteHorarioComercial = DescricaoAutomacao.EhGatilhoDeTempo(_gatilho) && _somenteHorarioComercial
+        };
+        for (var i = 0; i < _acoes.Count; i++)
+            regra.Acoes.Add(new AcaoAutomacao { Tipo = _acoes[i].Tipo, Ordem = i, ParametrosJson = JsonAutomacao.Serializar(_acoes[i].P) });
+        return regra;
+    }
+
+    private string Resumo => _foto is null ? "" : DescricaoAutomacao.Regra(MontarRegra(), _foto);
+
+    private void AlterarGatilho(TipoGatilho gatilho)
+    {
+        if ((int)gatilho is 0 or 19) return;
+        _gatilho = gatilho;
+        _parametrosGatilho.Dias = gatilho switch
+        {
+            TipoGatilho.ParadoNaLista => Math.Max(1, _parametrosGatilho.Dias),
+            TipoGatilho.PrazoVencido => 0,
+            _ => _parametrosGatilho.Dias
+        };
+    }
+
+    private void AdicionarCondicao() => _condicoes.Add(new Condicao { Tipo = TipoCondicao.Lista, Operador = OperadorCondicao.EstaEm });
+
+    private void AlterarTipoCondicao(Condicao condicao, TipoCondicao tipo)
+    {
+        condicao.Tipo = tipo;
+        condicao.Operador = DescricaoAutomacao.OperadoresPara(tipo)[0];
+        condicao.Ids = []; condicao.Texto = null; condicao.Numero = null;
+    }
+
+    private static bool PrecisaDeIds(Condicao c)
+        => c.Tipo is TipoCondicao.Lista or TipoCondicao.Prioridade or TipoCondicao.Etiqueta or TipoCondicao.Sistema or TipoCondicao.Desenvolvedor or TipoCondicao.Solicitante
+           && c.Operador is not (OperadorCondicao.Vazio or OperadorCondicao.NaoVazio);
+
+    private bool PrecisaDeNumero(Condicao c)
+        => c.Tipo is TipoCondicao.DiasNaLista or TipoCondicao.DiasParaPrazo
+           || c.Tipo == TipoCondicao.Estimativa && c.Operador is OperadorCondicao.MaiorOuIgual or OperadorCondicao.MenorOuIgual
+           || c.Tipo == TipoCondicao.CampoPersonalizado && c.Operador is OperadorCondicao.MaiorOuIgual or OperadorCondicao.MenorOuIgual && !CampoEhData(c);
+
+    private bool PrecisaDeTexto(Condicao c)
+        => c.Tipo == TipoCondicao.Titulo
+           || c.Tipo == TipoCondicao.CampoPersonalizado && c.Operador is OperadorCondicao.Igual or OperadorCondicao.Diferente or OperadorCondicao.Contem or OperadorCondicao.NaoContem
+           || c.Tipo == TipoCondicao.CampoPersonalizado && c.Operador is OperadorCondicao.MaiorOuIgual or OperadorCondicao.MenorOuIgual && CampoEhData(c);
+
+    private bool CampoEhData(Condicao c) => _foto!.Listas.SelectMany(l => l.DefinicoesCampo)
+        .Any(d => d.Tipo == TipoCampo.Data && d.Nome.Trim().Equals(c.CampoNome?.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private List<OpcaoSelecao> OpcoesCondicao(TipoCondicao tipo) => tipo switch
+    {
+        TipoCondicao.Lista => ListasEmOrdem.Select(l => new OpcaoSelecao(l.Id, _foto!.NomeLista(l.Id))).ToList(),
+        TipoCondicao.Prioridade => Enum.GetValues<Prioridade>().Select(p => new OpcaoSelecao((int)p, p.ToString())).ToList(),
+        TipoCondicao.Etiqueta => _foto!.Etiquetas.Select(e => new OpcaoSelecao(e.Id, e.Nome, e.Cor)).ToList(),
+        TipoCondicao.Sistema => _foto!.Sistemas.Select(s => new OpcaoSelecao(s.Id, s.Nome)).ToList(),
+        _ => Usuarios
+    };
+
+    private void AdicionarAcao() => _acoes.Add(new AcaoEditavel { Tipo = TipoAcaoAutomacao.NotificarResponsavel });
+
+    private void MoverAcao(int indice, int deslocamento)
+    {
+        var novo = indice + deslocamento;
+        (_acoes[indice], _acoes[novo]) = (_acoes[novo], _acoes[indice]);
+    }
+
+    // ───── Editores de parâmetros por tipo de ação ─────
+
+    private RenderFragment EditorAcao(AcaoEditavel acao) => __builder =>
+    {
+        var p = acao.P;
+        switch (acao.Tipo)
+        {
+            case TipoAcaoAutomacao.MoverCartao:
+                <div class="regra-linha">
+                    @SeletorLista(p, "Mover para", obrigatorio: true)
+                    <MudSwitch T="bool" @bind-Value="p.NoTopo" Color="Color.Primary" Label="No topo da lista" />
+                </div>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Faz um movimento completo: histórico, campos automáticos e exigências da lista. Se a lista bloquear a entrada com pendências, o cartão não é movido.</MudText>
+                break;
+
+            case TipoAcaoAutomacao.NotificarResponsavel:
+                @EditorDestinatarios(p, emails: false)
+                <MudTextField @bind-Value="p.Texto" Label="Mensagem" Placeholder="Automação &quot;{regra}&quot;: cartão &quot;{titulo}&quot;." Class="mt-2" />
+                break;
+
+            case TipoAcaoAutomacao.PreencherCampo:
+                <div class="regra-linha">
+                    <MudSelect T="string" @bind-Value="p.CampoNome" Label="Campo" Class="regra-campo-md">
+                        @foreach (var nome in NomesCampos)
+                        {
+                            <MudSelectItem Value="@nome">@nome</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudTextField @bind-Value="p.Valor" Label="Valor ({hoje} vira a data de hoje)" Class="regra-campo-lg" />
+                    <MudSwitch T="bool" @bind-Value="p.SomenteSeVazio" Color="Color.Primary" Label="Só se estiver vazio" />
+                </div>
+                break;
+
+            case TipoAcaoAutomacao.AtribuirDesenvolvedor:
+                <div class="regra-linha">
+                    <MudSelect T="ModoAtribuicao" @bind-Value="p.ModoAtribuicao" Label="Atribuir a" Class="regra-campo-md" ToStringFunc="@(m => NomeModo(m))">
+                        @foreach (var modo in Enum.GetValues<ModoAtribuicao>())
+                        {
+                            <MudSelectItem Value="@modo">@NomeModo(modo)</MudSelectItem>
+                        }
+                    </MudSelect>
+                    @if (p.ModoAtribuicao == ModoAtribuicao.UsuarioEspecifico)
+                    {
+                        <MudSelect T="int?" @bind-Value="p.UsuarioId" Label="Pessoa" Class="regra-campo-md" ToStringFunc="@(id => _foto!.NomeUsuario(id))">
+                            @foreach (var usuario in _foto!.Usuarios)
+                            {
+                                <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    <MudSwitch T="bool" @bind-Value="p.SubstituirAtuais" Color="Color.Primary" Label="Substituir os atuais" />
+                </div>
+                @if (p.ModoAtribuicao is ModoAtribuicao.MenorCarga or ModoAtribuicao.Revezamento)
+                {
+                    <MultiSelecaoFiltro Label="Entre estas pessoas (vazio = todos os usuários ativos)" Opcoes="@Usuarios" Selecionados="p.UsuarioIds" SelecionadosChanged="@(ids => p.UsuarioIds = ids.ToList())" Class="mt-2" />
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Carga = soma das estimativas dos cartões ativos da pessoa no quadro (cartão sem estimativa conta 1).</MudText>
+                }
+                break;
+
+            case TipoAcaoAutomacao.RemoverDesenvolvedores:
+                <MultiSelecaoFiltro Label="Remover estas pessoas (vazio = todas)" Opcoes="@Usuarios" Selecionados="p.UsuarioIds" SelecionadosChanged="@(ids => p.UsuarioIds = ids.ToList())" />
+                break;
+
+            case TipoAcaoAutomacao.AdicionarEtiqueta:
+            case TipoAcaoAutomacao.RemoverEtiqueta:
+                <MudSelect T="int?" @bind-Value="p.EtiquetaId" Label="Etiqueta *" ToStringFunc="@(id => _foto!.Etiquetas.FirstOrDefault(e => e.Id == id)?.Nome)" Style="max-width:320px">
+                    @foreach (var etiqueta in _foto!.Etiquetas)
+                    {
+                        <MudSelectItem Value="@((int?)etiqueta.Id)">@etiqueta.Nome</MudSelectItem>
+                    }
+                </MudSelect>
+                break;
+
+            case TipoAcaoAutomacao.DefinirPrioridade:
+                <div class="regra-linha">
+                    <MudSwitch T="bool" @bind-Value="p.AumentarUmNivel" Color="Color.Primary" Label="Aumentar um nível" />
+                    @if (!p.AumentarUmNivel)
+                    {
+                        <MudSelect T="Prioridade?" @bind-Value="p.Prioridade" Label="Prioridade" Clearable="true" Class="regra-campo-md">
+                            @foreach (var prioridade in Enum.GetValues<Prioridade>())
+                            {
+                                <MudSelectItem Value="@((Prioridade?)prioridade)">@prioridade</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                </div>
+                break;
+
+            case TipoAcaoAutomacao.DefinirPrazo:
+                <div class="regra-linha">
+                    <MudSelect T="bool" @bind-Value="p.AplicarEmDataInicio" Label="Data" Class="regra-campo-sm">
+                        <MudSelectItem Value="false">Prazo</MudSelectItem>
+                        <MudSelectItem Value="true">Início</MudSelectItem>
+                    </MudSelect>
+                    <MudSelect T="BaseDataAutomacao" @bind-Value="p.BaseData" Label="A partir de" Class="regra-campo-sm">
+                        <MudSelectItem Value="BaseDataAutomacao.Hoje">Hoje</MudSelectItem>
+                        <MudSelectItem Value="BaseDataAutomacao.PrazoAtual">Prazo atual</MudSelectItem>
+                        <MudSelectItem Value="BaseDataAutomacao.Limpar">Limpar a data</MudSelectItem>
+                    </MudSelect>
+                    @if (p.BaseData != BaseDataAutomacao.Limpar)
+                    {
+                        <MudNumericField T="int" @bind-Value="p.Dias" Label="+ dias (negativo subtrai)" Class="regra-campo-sm" />
+                        <MudSwitch T="bool" @bind-Value="p.DiasUteis" Color="Color.Primary" Label="Dias úteis" />
+                    }
+                </div>
+                break;
+
+            case TipoAcaoAutomacao.AdicionarChecklist:
+                <MudTextField T="string" Value="@string.Join("\n", p.Itens)" ValueChanged="@(v => p.Itens = (v ?? "").Split('\n').Select(i => i.Trim()).Where(i => i.Length > 0).ToList())"
+                              Label="Itens (um por linha) *" Lines="4" />
+                break;
+
+            case TipoAcaoAutomacao.CriarCartaoFilho:
+                <div class="regra-linha">
+                    <MudTextField @bind-Value="p.Titulo" Label="Título" Placeholder="Subtarefa de {titulo}" Class="regra-campo-lg" />
+                    @SeletorLista(p, "Na lista (vazio = mesma do pai)", obrigatorio: false)
+                </div>
+                break;
+
+            case TipoAcaoAutomacao.Comentar:
+                <MudTextField @bind-Value="p.Texto" Label="Comentário *" Lines="3" />
+                break;
+
+            case TipoAcaoAutomacao.EnviarEmail:
+                @EditorDestinatarios(p, emails: true)
+                <MudTextField @bind-Value="p.Assunto" Label="Assunto" Placeholder="[{regra}] {titulo}" Class="mt-2" />
+                <MudTextField @bind-Value="p.Texto" Label="Mensagem" Lines="5" Class="mt-2" Placeholder="O cartão &quot;{titulo}&quot; ({lista}, prazo {prazo}) precisa de atenção. {link}" />
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Respeita a preferência "receber e-mails de automação" de cada usuário e o limite de e-mails por hora da regra.</MudText>
+                break;
+
+            case TipoAcaoAutomacao.CriarAlerta:
+                <div class="regra-linha">
+                    <MudSelect T="SeveridadeAlerta" @bind-Value="p.Severidade" Label="Severidade" Class="regra-campo-sm">
+                        <MudSelectItem Value="SeveridadeAlerta.Info">Informação</MudSelectItem>
+                        <MudSelectItem Value="SeveridadeAlerta.Aviso">Aviso</MudSelectItem>
+                        <MudSelectItem Value="SeveridadeAlerta.Critico">Crítico</MudSelectItem>
+                    </MudSelect>
+                    <MudTextField @bind-Value="p.Texto" Label="Mensagem do alerta *" Class="regra-campo-lg" />
+                </div>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">O alerta fica visível no cartão até ser resolvido (por alguém ou pela ação "Resolver alertas"). Não duplica alerta igual já aberto.</MudText>
+                break;
+
+            case TipoAcaoAutomacao.ResolverAlertas:
+                <MudSwitch T="bool" @bind-Value="p.TodosAlertasDoCartao" Color="Color.Primary" Label="Resolver todos os alertas do cartão (senão, só os criados por esta regra)" />
+                break;
+
+            case TipoAcaoAutomacao.ResolverConflitoDatas:
+                <div class="regra-linha">
+                    <MudSelect T="EstrategiaConflito" @bind-Value="p.Estrategia" Label="Quem cede a vez" Class="regra-campo-md" ToStringFunc="@(e => "O " + DescricaoAutomacao.NomeEstrategia(e))">
+                        @foreach (var estrategia in Enum.GetValues<EstrategiaConflito>())
+                        {
+                            <MudSelectItem Value="@estrategia">O cartão @DescricaoAutomacao.NomeEstrategia(estrategia)</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="ResolucaoConflito" @bind-Value="p.Resolucao" Label="O que fazer" Class="regra-campo-md">
+                        <MudSelectItem Value="ResolucaoConflito.EmpurrarDatas">Remarcar para o primeiro período livre</MudSelectItem>
+                        <MudSelectItem Value="ResolucaoConflito.MoverParaLista">Mover para uma lista</MudSelectItem>
+                        <MudSelectItem Value="ResolucaoConflito.ApenasAvisar">Apenas avisar os envolvidos</MudSelectItem>
+                    </MudSelect>
+                    @if (p.Resolucao != ResolucaoConflito.ApenasAvisar)
+                    {
+                        <MudSelect T="ModoAplicacao" @bind-Value="p.Modo" Label="Modo" Class="regra-campo-sm">
+                            <MudSelectItem Value="ModoAplicacao.Sugerir">Sugerir (alguém aprova)</MudSelectItem>
+                            <MudSelectItem Value="ModoAplicacao.Aplicar">Aplicar direto</MudSelectItem>
+                        </MudSelect>
+                    }
+                </div>
+                @if (p.Resolucao != ResolucaoConflito.ApenasAvisar)
+                {
+                    <div class="mt-2">@SeletorLista(p, p.Resolucao == ResolucaoConflito.MoverParaLista ? "Mover para *" : "Também mover para (opcional)", obrigatorio: p.Resolucao == ResolucaoConflito.MoverParaLista)</div>
+                }
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Remarcar mantém a duração do cartão (dias úteis entre início e prazo, ou a estimativa) e procura o primeiro intervalo sem conflito com os outros cartões dos mesmos desenvolvedores.
+                </MudText>
+                break;
+
+            case TipoAcaoAutomacao.PostarNoTeams:
+            case TipoAcaoAutomacao.PostarResumoNoTeams:
+                <div class="regra-linha">
+                    <MudTextField @bind-Value="p.UrlWebhook" Label="URL do webhook do canal *" Class="regra-campo-lg" InputType="InputType.Password"
+                                  HelperText="Gerada no canal pelo app Workflows. Trate como senha: quem tem a URL posta no canal." />
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Send" Disabled="@(!MensagemTeams.UrlValida(p.UrlWebhook) || _testandoTeams)"
+                               OnClick="@(() => TestarTeams(p))">Testar envio</MudButton>
+                </div>
+                <MudTextField @bind-Value="p.Titulo" Label="Título" Class="mt-2"
+                              Placeholder="@(acao.Tipo == TipoAcaoAutomacao.PostarNoTeams ? "{codigo} · {titulo}" : "Resumo do quadro — {hoje}")" />
+                <MudTextField @bind-Value="p.Texto" Label="Mensagem (opcional)" Lines="3" Class="mt-2" />
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @(acao.Tipo == TipoAcaoAutomacao.PostarNoTeams
+                        ? "Posta um cartão com lista, prazo, prioridade, desenvolvedores, solicitante e o botão \"Abrir cartão\"."
+                        : "Posta uma vez por disparo os números do quadro (em andamento, atrasados, vencendo, bloqueados, conflitos, parados) e os 10 atrasados mais antigos. Ideal com o gatilho \"Agendamento\".")
+                    Não envia mensagem direta a pessoas (isso exigiria Entra ID). Guia: docs/integracoes/teams.md.
+                </MudText>
+                break;
+
+            case TipoAcaoAutomacao.EnviarResumo:
+                @EditorDestinatarios(p, emails: false)
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">Cada pessoa recebe os próprios cartões ativos do quadro: atrasados, vencendo, bloqueados, em conflito e parados. Ideal com o gatilho "Agendamento".</MudText>
+                break;
+        }
+    };
+
+    private RenderFragment SeletorLista(ParametrosAcao p, string rotulo, bool obrigatorio) => __builder =>
+    {
+        <MudSelect T="int?" @bind-Value="p.ListaId" Label="@rotulo" Clearable="@(!obrigatorio)" Class="regra-campo-md" ToStringFunc="@(id => id.HasValue ? _foto!.NomeLista(id.Value) : null)">
+            @foreach (var lista in ListasFolha)
+            {
+                <MudSelectItem Value="@((int?)lista.Id)">@_foto!.NomeLista(lista.Id)</MudSelectItem>
+            }
+        </MudSelect>
+    };
+
+    private RenderFragment EditorDestinatarios(ParametrosAcao p, bool emails) => __builder =>
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">Destinatários</MudText>
+        <div class="d-flex flex-wrap gap-3">
+            @foreach (var (flag, nome) in new[] { (DestinatariosAutomacao.Desenvolvedores, "Desenvolvedores"), (DestinatariosAutomacao.DesenvolvedorPrincipal, "Desenvolvedor principal"), (DestinatariosAutomacao.Solicitante, "Solicitante"), (DestinatariosAutomacao.Criador, "Criador do cartão"), (DestinatariosAutomacao.UsuariosEspecificos, "Pessoas específicas") })
+            {
+                var f = flag;
+                <MudCheckBox T="bool" Label="@nome" Dense="true" Value="@p.Destinatarios.HasFlag(f)"
+                             ValueChanged="@(v => p.Destinatarios = v ? p.Destinatarios | f : p.Destinatarios & ~f)" />
+            }
+        </div>
+        @if (p.Destinatarios.HasFlag(DestinatariosAutomacao.UsuariosEspecificos))
+        {
+            <MultiSelecaoFiltro Label="Pessoas" Opcoes="@Usuarios" Selecionados="p.DestinatarioIds" SelecionadosChanged="@(ids => p.DestinatarioIds = ids.ToList())" Class="mt-1" />
+        }
+        @if (emails)
+        {
+            <MudTextField @bind-Value="p.EmailsFixos" Label="Outros e-mails (separados por ;)" Class="mt-1" />
+        }
+    };
+
+    private static string NomeModo(ModoAtribuicao modo) => modo switch
+    {
+        ModoAtribuicao.UsuarioEspecifico => "Uma pessoa específica",
+        ModoAtribuicao.MenorCarga => "Quem tem menor carga",
+        ModoAtribuicao.Revezamento => "Revezamento (um de cada vez)",
+        ModoAtribuicao.Solicitante => "O solicitante do cartão",
+        _ => "Quem disparou o evento"
+    };
+
+    private bool _testandoTeams;
+
+    private async Task TestarTeams(ParametrosAcao p)
+    {
+        _testandoTeams = true;
+        try
+        {
+            var mensagem = MensagemTeams.Montar("Teste do Sistema de Gestão de Demandas",
+                $"Se você está vendo isto, a regra \"{(string.IsNullOrWhiteSpace(_nome) ? "(sem nome)" : _nome)}\" consegue postar neste canal.",
+                [new MensagemTeams.Fato("Enviado em", DateTime.Now.ToString("dd/MM/yyyy HH:mm"))], null, null);
+            await Teams.EnviarAsync(p.UrlWebhook!, mensagem);
+            Snackbar.Add("Mensagem de teste enviada. Confira o canal.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Falha no envio: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _testandoTeams = false;
+        }
+    }
+
+    // ───── Validação e gravação ─────
+
+    private List<string> Validar()
+    {
+        var erros = new List<string>();
+        if (string.IsNullOrWhiteSpace(_nome)) erros.Add("Informe o nome da regra.");
+        if (_acoes.Count == 0) erros.Add("Adicione pelo menos uma ação.");
+        if (_gatilho == TipoGatilho.ParadoNaLista && _parametrosGatilho.Dias < 1) erros.Add("\"Dias parado\" deve ser pelo menos 1.");
+        foreach (var c in _condicoes)
+        {
+            if (PrecisaDeIds(c) && c.Ids.Count == 0) erros.Add($"Condição \"{DescricaoAutomacao.NomeCondicao(c.Tipo)}\": escolha ao menos um valor.");
+            if (c.Tipo == TipoCondicao.CampoPersonalizado && string.IsNullOrWhiteSpace(c.CampoNome)) erros.Add("Condição de campo personalizado: escolha o campo.");
+            if (PrecisaDeNumero(c) && !c.Numero.HasValue) erros.Add($"Condição \"{DescricaoAutomacao.NomeCondicao(c.Tipo)}\": informe o valor.");
+        }
+        for (var i = 0; i < _acoes.Count; i++)
+        {
+            var (tipo, p) = (_acoes[i].Tipo, _acoes[i].P);
+            var nome = $"Ação {i + 1} ({DescricaoAutomacao.NomeAcao(tipo)})";
+            var semDestinatario = p.Destinatarios == DestinatariosAutomacao.Nenhum && string.IsNullOrWhiteSpace(p.EmailsFixos)
+                || p.Destinatarios == DestinatariosAutomacao.UsuariosEspecificos && p.DestinatarioIds.Count == 0 && string.IsNullOrWhiteSpace(p.EmailsFixos);
+            var erro = tipo switch
+            {
+                TipoAcaoAutomacao.MoverCartao when !p.ListaId.HasValue => "escolha a lista de destino.",
+                TipoAcaoAutomacao.AtribuirDesenvolvedor when p.ModoAtribuicao == ModoAtribuicao.UsuarioEspecifico && !p.UsuarioId.HasValue => "escolha a pessoa.",
+                TipoAcaoAutomacao.AtribuirDesenvolvedor when p.ModoAtribuicao == ModoAtribuicao.QuemDisparou && DescricaoAutomacao.EhGatilhoDeTempo(_gatilho) => "gatilhos de tempo não têm quem disparou; escolha outro modo.",
+                TipoAcaoAutomacao.AdicionarEtiqueta or TipoAcaoAutomacao.RemoverEtiqueta when !p.EtiquetaId.HasValue => "escolha a etiqueta.",
+                TipoAcaoAutomacao.DefinirPrioridade when !p.AumentarUmNivel && !p.Prioridade.HasValue => "escolha a prioridade ou marque \"aumentar um nível\".",
+                TipoAcaoAutomacao.PreencherCampo when string.IsNullOrWhiteSpace(p.CampoNome) => "escolha o campo.",
+                TipoAcaoAutomacao.AdicionarChecklist when p.Itens.Count == 0 => "informe ao menos um item.",
+                TipoAcaoAutomacao.Comentar or TipoAcaoAutomacao.CriarAlerta when string.IsNullOrWhiteSpace(p.Texto) => "informe o texto.",
+                TipoAcaoAutomacao.NotificarResponsavel or TipoAcaoAutomacao.EnviarEmail or TipoAcaoAutomacao.EnviarResumo when semDestinatario => "escolha os destinatários.",
+                TipoAcaoAutomacao.ResolverConflitoDatas when p.Resolucao == ResolucaoConflito.MoverParaLista && !p.ListaId.HasValue => "escolha a lista.",
+                TipoAcaoAutomacao.PostarNoTeams or TipoAcaoAutomacao.PostarResumoNoTeams when !MensagemTeams.UrlValida(p.UrlWebhook) => "informe a URL do webhook (https://...).",
+                _ => null
+            };
+            if (erro is not null) erros.Add($"{nome}: {erro}");
+        }
+        return erros;
+    }
+
+    private async Task Salvar()
+    {
+        var erros = Validar();
+        if (erros.Count > 0)
+        {
+            foreach (var erro in erros.Take(5)) Snackbar.Add(erro, Severity.Warning);
+            return;
+        }
+        var montada = MontarRegra();
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        RegraAutomacao regra;
+        if (RegraId.HasValue)
+        {
+            regra = await Db.RegrasAutomacao.Include(r => r.Acoes).FirstAsync(r => r.Id == RegraId.Value);
+            Db.AcoesAutomacao.RemoveRange(regra.Acoes);
+            regra.Acoes.Clear();
+        }
+        else
+        {
+            regra = new RegraAutomacao { QuadroId = QuadroId, CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow };
+            Db.RegrasAutomacao.Add(regra);
+        }
+        regra.Nome = montada.Nome; regra.Descricao = montada.Descricao; regra.Ativa = montada.Ativa;
+        regra.Gatilho = montada.Gatilho; regra.ListaId = montada.ListaId; regra.ParametrosGatilhoJson = montada.ParametrosGatilhoJson;
+        regra.CondicoesJson = montada.CondicoesJson; regra.ExigirTodasCondicoes = montada.ExigirTodasCondicoes;
+        regra.SomenteHorarioComercial = montada.SomenteHorarioComercial;
+        foreach (var acao in montada.Acoes)
+        {
+            acao.CriadoPorId = usuarioId; acao.CriadoEm = DateTime.UtcNow;
+            regra.Acoes.Add(acao);
+        }
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Regra salva.", Severity.Success);
+        MudDialog.Close(DialogResult.Ok(regra.Id));
+    }
+}

@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KanbanDemandas.Core/KanbanDemandas.Core.csproj" />
+    <Project Path="src/KanbanDemandas.Infrastructure/KanbanDemandas.Infrastructure.csproj" />
+    <Project Path="src/KanbanDemandas.Portal/KanbanDemandas.Portal.csproj" />
+    <Project Path="src/KanbanDemandas.Web/KanbanDemandas.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KanbanDemandas.Tests/KanbanDemandas.Tests.csproj" />
+  </Folder>
+</Solution>

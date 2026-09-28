@@ -1,0 +1,278 @@
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject MovimentacaoCartaoService Movimentacao
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6">Configuração de @ListaNome</MudText>
+
+        @if (_lista is not null)
+        {
+            <MudPaper Outlined="true" Class="pa-3 mt-3">
+                <MudText Typo="Typo.subtitle1">Exigências da etapa</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">O que o cartão precisa ter para estar nesta coluna (ex.: desenvolvedor atribuído em "A Fazer").</MudText>
+                <div class="d-flex flex-wrap gap-4 mt-2">
+                    @foreach (var campo in RegrasEtapa.CamposFixos)
+                    {
+                        <MudCheckBox T="bool" Label="@RegrasEtapa.Nome(campo)" Value="@_lista.CamposFixosExigidos.HasFlag(campo)"
+                                     ValueChanged="@(marcado => AlternarExigido(campo, marcado))" Dense="true"
+                                     Disabled="@_lista.CamposFixosBloqueados.HasFlag(campo)" />
+                    }
+                </div>
+                <MudSwitch T="bool" @bind-Value="_lista.BloquearEntradaComPendencias" Color="Color.Warning" Class="mt-2"
+                           Label="Bloquear a entrada enquanto houver pendências (senão, o cartão entra e fica sinalizado)" />
+
+                <MudText Typo="Typo.subtitle1" Class="mt-4">Não permitido nesta etapa</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    O cartão não pode ter estes dados enquanto estiver aqui (ex.: desenvolvedor e prazo no Backlog). Ficam desabilitados na edição,
+                    automações não os preenchem e, ao mover um cartão para cá, eles são removidos após confirmação.
+                </MudText>
+                <div class="d-flex flex-wrap gap-4 mt-2">
+                    @foreach (var campo in RegrasEtapa.CamposBloqueaveis)
+                    {
+                        <MudCheckBox T="bool" Label="@RegrasEtapa.Nome(campo)" Value="@_lista.CamposFixosBloqueados.HasFlag(campo)" Color="Color.Error"
+                                     ValueChanged="@(marcado => AlternarBloqueado(campo, marcado))" Dense="true"
+                                     Disabled="@_lista.CamposFixosExigidos.HasFlag(campo)" />
+                    }
+                </div>
+                <div class="d-flex justify-end">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" OnClick="SalvarExigencias">Salvar regras da etapa</MudButton>
+                </div>
+            </MudPaper>
+        }
+
+        <MudText Typo="Typo.subtitle1" Class="mt-4">Campos da coluna</MudText>
+        @if (_campos.Count == 0)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Nenhum campo configurado.</MudText>
+        }
+        @foreach (var campo in _campos)
+        {
+            <MudPaper Class="pa-3 mt-2" Outlined="true">
+                <div class="d-flex align-center justify-space-between gap-2">
+                    <div>
+                        <MudText Typo="Typo.subtitle2">@campo.Nome</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@Resumo(campo)</MudText>
+                    </div>
+                    <div class="d-flex">
+                        <MudTooltip Text="Editar campo">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => Editar(campo))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Excluir campo">
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => Excluir(campo))" />
+                        </MudTooltip>
+                    </div>
+                </div>
+            </MudPaper>
+        }
+
+        <MudDivider Class="my-4" />
+        <MudText Typo="Typo.subtitle1">@(_editando is null ? "Novo campo" : $"Editando \"{_editando.Nome}\"")</MudText>
+        <MudTextField @bind-Value="_nome" Label="Nome" Required="true" Class="mt-2" />
+        <MudSelect T="TipoCampo" Value="_tipo" ValueChanged="AlterarTipo" Label="Tipo" Class="mt-2" Disabled="@(_editando is not null)">
+            @foreach (var tipo in Enum.GetValues<TipoCampo>())
+            {
+                <MudSelectItem Value="@tipo">@NomeTipo(tipo)</MudSelectItem>
+            }
+        </MudSelect>
+        @if (_tipo == TipoCampo.Selecao)
+        {
+            <MudTextField @bind-Value="_opcoes" Label="Opções separadas por |" Class="mt-2" />
+        }
+        <MudSelect T="PreenchimentoAutomatico" Value="_preenchimento" ValueChanged="AlterarPreenchimento" Label="Preenchimento" Class="mt-2">
+            <MudSelectItem Value="PreenchimentoAutomatico.Manual">Manual (o usuário preenche)</MudSelectItem>
+            @if (_tipo == TipoCampo.Data)
+            {
+                <MudSelectItem Value="PreenchimentoAutomatico.DataEntrada">Automático: data em que o cartão entra na coluna</MudSelectItem>
+            }
+            @if (_tipo is TipoCampo.Texto or TipoCampo.AreaTexto)
+            {
+                <MudSelectItem Value="PreenchimentoAutomatico.UsuarioQueMoveu">Automático: usuário que moveu o cartão</MudSelectItem>
+            }
+        </MudSelect>
+        @if (_preenchimento == PreenchimentoAutomatico.Manual)
+        {
+            <div class="d-flex flex-wrap gap-4 mt-2">
+                <MudSwitch T="bool" @bind-Value="_obrigatorio" Color="Color.Primary" Label="Obrigatório" />
+                <MudSwitch T="bool" @bind-Value="_pedirNovamente" Color="Color.Primary" Label="Pedir a cada entrada" />
+            </div>
+        }
+        else
+        {
+            <MudSelect T="RegraReentrada" @bind-Value="_regraReentrada" Label="Se o cartão voltar a entrar na coluna" Class="mt-2"
+                       HelperText="Voltar logo após sair (dentro da janela de correção) desfaz o movimento e não conta como nova entrada.">
+                <MudSelectItem Value="RegraReentrada.ManterPrimeiro">Manter o valor da primeira entrada</MudSelectItem>
+                <MudSelectItem Value="RegraReentrada.AtualizarUltimo">Atualizar para a entrada mais recente</MudSelectItem>
+                <MudSelectItem Value="RegraReentrada.NovoRegistro">Registrar uma nova ocorrência a cada entrada</MudSelectItem>
+            </MudSelect>
+            @if (_preenchimento == PreenchimentoAutomatico.DataEntrada)
+            {
+                <MudSwitch T="bool" @bind-Value="_defineDataInicio" Color="Color.Primary" Class="mt-2"
+                           Label="Usar como Data de início do cartão (conflitos de agenda, filtros e indicadores)" />
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        @if (_editando is not null)
+        {
+            <MudButton OnClick="LimparFormulario">Cancelar edição</MudButton>
+        }
+        <MudButton OnClick="Fechar">Fechar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@string.IsNullOrWhiteSpace(_nome)" OnClick="Salvar">
+            @(_editando is null ? "Adicionar campo" : "Salvar campo")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int ListaId { get; set; }
+    [Parameter] public string ListaNome { get; set; } = string.Empty;
+
+    private Lista? _lista;
+    private List<DefinicaoCampo> _campos = [];
+    private DefinicaoCampo? _editando;
+    private string _nome = string.Empty;
+    private TipoCampo _tipo = TipoCampo.Texto;
+    private string? _opcoes;
+    private bool _obrigatorio;
+    private bool _pedirNovamente;
+    private PreenchimentoAutomatico _preenchimento = PreenchimentoAutomatico.Manual;
+    private RegraReentrada _regraReentrada = RegraReentrada.ManterPrimeiro;
+    private bool _defineDataInicio;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _lista = await Db.Listas.FirstOrDefaultAsync(l => l.Id == ListaId);
+        await Carregar();
+    }
+
+    private async Task Carregar()
+        => _campos = await Db.DefinicoesCampo.Where(c => c.ListaId == ListaId && !c.Excluido).OrderBy(c => c.Ordem).ToListAsync();
+
+    private static string NomeTipo(TipoCampo tipo) => tipo switch
+    {
+        TipoCampo.AreaTexto => "Área de texto",
+        TipoCampo.Numero => "Número",
+        TipoCampo.Selecao => "Seleção",
+        _ => tipo.ToString()
+    };
+
+    private static string Resumo(DefinicaoCampo campo)
+    {
+        var partes = new List<string> { NomeTipo(campo.Tipo) };
+        if (RegrasEtapa.EhManual(campo))
+        {
+            if (campo.Obrigatorio) partes.Add("obrigatório");
+            if (campo.PedirNovamenteACadaEntrada) partes.Add("pedido a cada entrada");
+        }
+        else
+        {
+            partes.Add(RegrasEtapa.DescreverAutomatico(campo));
+            if (campo.DefineDataInicioCartao) partes.Add("define a Data de início");
+        }
+        return string.Join(" · ", partes);
+    }
+
+    private void AlternarExigido(CamposFixosCartao campo, bool marcado)
+    {
+        if (_lista is null) return;
+        _lista.CamposFixosExigidos = marcado ? _lista.CamposFixosExigidos | campo : _lista.CamposFixosExigidos & ~campo;
+    }
+
+    private void AlternarBloqueado(CamposFixosCartao campo, bool marcado)
+    {
+        if (_lista is null) return;
+        _lista.CamposFixosBloqueados = marcado ? _lista.CamposFixosBloqueados | campo : _lista.CamposFixosBloqueados & ~campo;
+    }
+
+    private async Task SalvarExigencias()
+    {
+        if (_lista is null) return;
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Regras da etapa salvas.", Severity.Success);
+
+        // Cartões que já estavam na lista antes da regra: oferece limpar agora (senão continuam como estão).
+        var afetados = await Movimentacao.ContarComBloqueadosAsync(_lista.Id);
+        if (afetados == 0) return;
+        var limpar = await Dialog.ShowMessageBox("Cartões já na lista",
+            $"{afetados} cartão(ões) nesta lista têm dados que ela não permite mais ({RegrasEtapa.Descrever(_lista.CamposFixosBloqueados)}). Remover agora?",
+            yesText: "Remover", cancelText: "Deixar como está");
+        if (limpar != true) return;
+        var alterados = await Movimentacao.LimparBloqueadosDaListaAsync(_lista.Id);
+        Snackbar.Add($"{alterados} cartão(ões) ajustados.", Severity.Success);
+    }
+
+    private void AlterarTipo(TipoCampo tipo)
+    {
+        _tipo = tipo;
+        if (!PreenchimentoValido(_preenchimento, tipo)) _preenchimento = PreenchimentoAutomatico.Manual;
+    }
+
+    private void AlterarPreenchimento(PreenchimentoAutomatico preenchimento)
+    {
+        _preenchimento = preenchimento;
+        if (preenchimento != PreenchimentoAutomatico.DataEntrada) _defineDataInicio = false;
+    }
+
+    private static bool PreenchimentoValido(PreenchimentoAutomatico preenchimento, TipoCampo tipo) => preenchimento switch
+    {
+        PreenchimentoAutomatico.DataEntrada => tipo == TipoCampo.Data,
+        PreenchimentoAutomatico.UsuarioQueMoveu => tipo is TipoCampo.Texto or TipoCampo.AreaTexto,
+        _ => true
+    };
+
+    private void Editar(DefinicaoCampo campo)
+    {
+        _editando = campo;
+        _nome = campo.Nome; _tipo = campo.Tipo; _opcoes = campo.OpcoesSelecao;
+        _obrigatorio = campo.Obrigatorio; _pedirNovamente = campo.PedirNovamenteACadaEntrada;
+        _preenchimento = campo.Preenchimento; _regraReentrada = campo.RegraReentrada; _defineDataInicio = campo.DefineDataInicioCartao;
+    }
+
+    private void LimparFormulario()
+    {
+        _editando = null;
+        _nome = string.Empty; _tipo = TipoCampo.Texto; _opcoes = null; _obrigatorio = false; _pedirNovamente = false;
+        _preenchimento = PreenchimentoAutomatico.Manual; _regraReentrada = RegraReentrada.ManterPrimeiro; _defineDataInicio = false;
+    }
+
+    private async Task Salvar()
+    {
+        if (string.IsNullOrWhiteSpace(_nome)) return;
+        var manual = _preenchimento == PreenchimentoAutomatico.Manual;
+        var campo = _editando ?? new DefinicaoCampo
+        {
+            Tipo = _tipo, ListaId = ListaId, Ordem = (_campos.Select(c => (int?)c.Ordem).Max() ?? 0) + 1,
+            CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        campo.Nome = _nome.Trim();
+        campo.OpcoesSelecao = campo.Tipo == TipoCampo.Selecao ? _opcoes?.Trim() : null;
+        campo.Preenchimento = PreenchimentoValido(_preenchimento, campo.Tipo) ? _preenchimento : PreenchimentoAutomatico.Manual;
+        // Campos automáticos são preenchidos pelo sistema: não fazem sentido como obrigatórios nem "pedir a cada entrada".
+        campo.Obrigatorio = manual && _obrigatorio;
+        campo.PedirNovamenteACadaEntrada = manual && _pedirNovamente;
+        campo.RegraReentrada = manual ? RegraReentrada.ManterPrimeiro : _regraReentrada;
+        campo.DefineDataInicioCartao = campo.Preenchimento == PreenchimentoAutomatico.DataEntrada && _defineDataInicio;
+        if (_editando is null) Db.DefinicoesCampo.Add(campo);
+
+        await Db.SaveChangesAsync();
+        Snackbar.Add(_editando is null ? "Campo adicionado." : "Campo atualizado.", Severity.Success);
+        LimparFormulario();
+        await Carregar();
+    }
+
+    private async Task Excluir(DefinicaoCampo campo)
+    {
+        campo.Excluido = true;
+        campo.ExcluidoEm = DateTime.UtcNow;
+        campo.ExcluidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        if (_editando == campo) LimparFormulario();
+        await Carregar();
+    }
+
+    private void Fechar() => MudDialog.Close(DialogResult.Ok(true));
+}

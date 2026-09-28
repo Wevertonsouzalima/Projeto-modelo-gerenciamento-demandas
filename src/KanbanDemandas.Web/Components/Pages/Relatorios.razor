@@ -1,0 +1,434 @@
+@page "/relatorios"
+@rendermode InteractiveServer
+@using KanbanDemandas.Web.Services.Relatorios
+@inject KanbanDbContext Db
+@inject RelatoriosService Servico
+@inject IExportacaoService Exportacao
+@inject IJSRuntime JS
+@inject IConfiguration Configuracao
+
+<PageTitle>Relatórios</PageTitle>
+
+<MudText Typo="Typo.h5">Relatórios</MudText>
+<MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+    Indicadores de fluxo calculados a partir do histórico de movimentações (movimentos desfeitos no vai-e-volta não entram).
+    "Concluído" é a entrada na lista com esse nome; "início" é a primeira entrada numa lista que não é backlog nem conclusão.
+</MudText>
+
+<MudPaper Outlined="true" Class="pa-3 mb-4 d-flex flex-wrap gap-3 align-center">
+    <MudSelect T="int" Value="_quadroId" ValueChanged="@(async id => { _quadroId = id; await Carregar(); })" Label="Quadro" Dense="true" Style="min-width:200px"
+               ToStringFunc="@(id => _quadros.FirstOrDefault(q => q.Id == id)?.Nome)">
+        @foreach (var quadro in _quadros)
+        {
+            <MudSelectItem Value="@quadro.Id">@quadro.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    <MudDateRangePicker DateRange="_periodo" DateRangeChanged="@(async p => { _periodo = p; await Carregar(); })" Label="Período" Style="min-width:240px" />
+    <MudSelect T="int?" Value="_sistemaId" ValueChanged="@(async id => { _sistemaId = id; await Carregar(); })" Label="Sistema" Clearable="true" Dense="true" Style="min-width:180px"
+               ToStringFunc="@(id => _sistemas.FirstOrDefault(s => s.Id == id)?.Nome)">
+        @foreach (var sistema in _sistemas)
+        {
+            <MudSelectItem Value="@((int?)sistema.Id)">@sistema.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    <MudSelect T="int?" Value="_desenvolvedorId" ValueChanged="@(async id => { _desenvolvedorId = id; await Carregar(); })" Label="Desenvolvedor" Clearable="true" Dense="true" Style="min-width:180px"
+               ToStringFunc="@(id => _usuarios.FirstOrDefault(u => u.Id == id)?.Nome)">
+        @foreach (var usuario in _usuarios)
+        {
+            <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+        }
+    </MudSelect>
+    @if (_carregando)
+    {
+        <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+    }
+</MudPaper>
+
+@if (_dados is not null)
+{
+    <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pt-4">
+        @* ── Fluxo acumulado ── *@
+        <MudTabPanel Text="Fluxo acumulado" Icon="@Icons.Material.Filled.StackedBarChart">
+            @CabecalhoRelatorio("Cartões em cada lista ao fim de cada " + (_fluxo.Linhas.Count > 1 && (_fluxo.Linhas[1].Dia - _fluxo.Linhas[0].Dia).Days == 7 ? "semana" : "dia") + ". Faixas que engrossam indicam acúmulo (gargalo).", ExportarFluxo)
+            @if (_fluxo.Linhas.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info">Sem dados no período.</MudAlert>
+            }
+            else
+            {
+                <MudPaper Outlined="true" Class="pa-3">
+                    <MudChart ChartType="ChartType.StackedBar" ChartSeries="@SeriesFluxo" XAxisLabels="@RotulosFluxo" ChartOptions="@Opcoes(_fluxo.Series.Count)" Width="100%" Height="360px" />
+                </MudPaper>
+                <MudTable Items="_fluxo.Linhas" Dense="true" Hover="true" Class="mt-3" RowsPerPage="@ItensPorPagina" HorizontalScrollbar="true">
+                    <HeaderContent>
+                        <MudTh>Data</MudTh>
+                        @foreach (var serie in _fluxo.Series) { <MudTh>@serie</MudTh> }
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.Dia.ToString("dd/MM/yyyy")</MudTd>
+                        @foreach (var serie in _fluxo.Series) { <MudTd>@context.PorLista.GetValueOrDefault(serie)</MudTd> }
+                    </RowTemplate>
+                    <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+                </MudTable>
+            }
+        </MudTabPanel>
+
+        @* ── Vazão ── *@
+        <MudTabPanel Text="Vazão" Icon="@Icons.Material.Filled.BarChart">
+            @CabecalhoRelatorio("Cartões concluídos por semana (segunda a domingo) no período.", ExportarVazao)
+            <MudGrid Class="mb-3">
+                @Numero("Concluídos no período", _vazao.Sum(v => v.Cartoes).ToString(), "cartões")
+                @Numero("Média semanal", (_vazao.Count == 0 ? 0 : _vazao.Average(v => v.Cartoes)).ToString("0.0"), "cartões por semana")
+                @Numero("Pontos entregues", _vazao.Sum(v => v.Pontos).ToString("0.##"), "soma das estimativas")
+            </MudGrid>
+            <MudPaper Outlined="true" Class="pa-3">
+                <MudChart ChartType="ChartType.Bar" ChartSeries="@(new List<ChartSeries> { new() { Name = "Cartões concluídos", Data = _vazao.Select(v => (double)v.Cartoes).ToArray() } })"
+                          XAxisLabels="@(_vazao.Select(v => v.Semana.ToString("dd/MM")).ToArray())" ChartOptions="@Opcoes(1)" Width="100%" Height="320px" />
+            </MudPaper>
+            <MudTable Items="_vazao" Dense="true" Hover="true" Class="mt-3" RowsPerPage="@ItensPorPagina">
+                <HeaderContent><MudTh>Semana de</MudTh><MudTh>Cartões</MudTh><MudTh>Pontos</MudTh></HeaderContent>
+                <RowTemplate><MudTd>@context.Semana.ToString("dd/MM/yyyy")</MudTd><MudTd>@context.Cartoes</MudTd><MudTd>@context.Pontos.ToString("0.##")</MudTd></RowTemplate>
+                <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        @* ── Tempo de ciclo ── *@
+        <MudTabPanel Text="Tempo de ciclo" Icon="@Icons.Material.Filled.Timer">
+            @CabecalhoRelatorio("Lead time = da criação à conclusão. Tempo de ciclo = do início do trabalho à conclusão. P85 = 85% dos cartões ficaram prontos em até esse tempo.", ExportarCiclos)
+            <MudGrid Class="mb-3">
+                @Numero("Lead time P50", $"{_percentisLead.P50:0.0} d", $"{_percentisLead.Amostras} cartões")
+                @Numero("Lead time P85", $"{_percentisLead.P85:0.0} d", "use para prometer prazos")
+                @Numero("Ciclo P50", $"{_percentisCiclo.P50:0.0} d", $"{_percentisCiclo.Amostras} cartões iniciados")
+                @Numero("Ciclo P85", $"{_percentisCiclo.P85:0.0} d", $"P95: {_percentisCiclo.P95:0.0} d")
+            </MudGrid>
+            <MudPaper Outlined="true" Class="pa-3">
+                <MudText Typo="Typo.subtitle2">Distribuição do lead time</MudText>
+                <MudChart ChartType="ChartType.Bar" ChartSeries="@(new List<ChartSeries> { new() { Name = "Cartões", Data = _histograma.Select(h => (double)h.Quantidade).ToArray() } })"
+                          XAxisLabels="@(_histograma.Select(h => h.Faixa).ToArray())" ChartOptions="@Opcoes(1)" Width="100%" Height="280px" />
+            </MudPaper>
+            <MudTable Items="_ciclos" Dense="true" Hover="true" Class="mt-3" RowsPerPage="@ItensPorPagina" HorizontalScrollbar="true">
+                <HeaderContent>
+                    <MudTh><MudTableSortLabel T="LinhaCiclo" SortBy="@(c => c.Titulo)">Cartão</MudTableSortLabel></MudTh>
+                    <MudTh>Sistema</MudTh><MudTh>Desenvolvedores</MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaCiclo" SortBy="@(c => c.ConcluidoEm)">Concluído em</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaCiclo" SortBy="@(c => c.LeadTimeDias)" InitialDirection="SortDirection.Descending">Lead time (d)</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaCiclo" SortBy="@(c => c.CicloDias ?? -1)">Ciclo (d)</MudTableSortLabel></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Titulo</MudTd><MudTd>@context.Sistema</MudTd><MudTd>@context.Desenvolvedores</MudTd>
+                    <MudTd>@context.ConcluidoEm.ToString("dd/MM/yyyy")</MudTd><MudTd>@context.LeadTimeDias.ToString("0.0")</MudTd>
+                    <MudTd>@(context.CicloDias?.ToString("0.0") ?? "—")</MudTd>
+                </RowTemplate>
+                <NoRecordsContent><MudText Class="mud-text-secondary">Nenhum cartão concluído no período.</MudText></NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        @* ── Envelhecimento ── *@
+        <MudTabPanel Text="Envelhecimento" Icon="@Icons.Material.Filled.HourglassBottom">
+            @CabecalhoRelatorio("Cartões em andamento hoje, do que está parado há mais tempo na coluna atual para o mais recente.", ExportarEnvelhecimento)
+            <MudGrid Class="mb-3">
+                @Numero("Em andamento", _envelhecimento.Count.ToString(), "cartões ativos")
+                @Numero("Parados há 5+ dias", _envelhecimento.Count(e => e.DiasNaLista >= 5).ToString(), "na mesma coluna")
+                @Numero("Atrasados", _envelhecimento.Count(e => e.Atrasado).ToString(), "prazo vencido")
+                @Numero("Idade P85", $"{RelatoriosService.CalcularPercentis(_envelhecimento.Select(e => (double)e.IdadeDias).ToList()).P85:0} d", "desde a criação")
+            </MudGrid>
+            <MudTable Items="_envelhecimento" Dense="true" Hover="true" RowsPerPage="@ItensPorPagina" HorizontalScrollbar="true">
+                <HeaderContent>
+                    <MudTh>Cartão</MudTh><MudTh>Lista</MudTh><MudTh>Desenvolvedores</MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaEnvelhecimento" SortBy="@(e => e.DiasNaLista)" InitialDirection="SortDirection.Descending">Dias na lista</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaEnvelhecimento" SortBy="@(e => e.IdadeDias)">Idade (d)</MudTableSortLabel></MudTh>
+                    <MudTh>Prazo</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Titulo</MudTd><MudTd>@context.Lista</MudTd><MudTd>@context.Desenvolvedores</MudTd>
+                    <MudTd>@context.DiasNaLista</MudTd><MudTd>@context.IdadeDias</MudTd>
+                    <MudTd>
+                        @context.Prazo?.ToString("dd/MM/yyyy")
+                        @if (context.Atrasado) { <MudChip T="string" Size="Size.Small" Color="Color.Error" Icon="@Icons.Material.Filled.Error">Atrasado</MudChip> }
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent><MudText Class="mud-text-secondary">Nenhum cartão em andamento.</MudText></NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+
+        @* ── Previsão ── *@
+        <MudTabPanel Text="Previsão" Icon="@Icons.Material.Filled.QueryStats">
+            @CabecalhoRelatorio("Simulação de Monte Carlo (10.000 cenários) sorteando a vazão real das últimas semanas. Não depende de estimativas.", null)
+            <MudPaper Outlined="true" Class="pa-3 mb-3 d-flex flex-wrap gap-3 align-center">
+                <MudNumericField T="int" @bind-Value="_restantes" Label="Cartões a entregar" Min="1" Style="max-width:180px" />
+                <MudNumericField T="int" @bind-Value="_semanasHistorico" Label="Semanas de histórico" Min="2" Max="52" Style="max-width:180px" />
+                <MudDatePicker @bind-Date="_dataAlvo" Label="Data alvo" Style="max-width:180px" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="Prever">Simular</MudButton>
+            </MudPaper>
+            @if (_amostras is not null)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+                    Vazão semanal usada (da mais recente para a mais antiga): @string.Join(", ", _amostras)
+                </MudText>
+            }
+            @if (_previsaoQuando is null && _previsaoQuantos is null && _amostras is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-3">
+                    Sem entregas nas semanas de histórico escolhidas — não há base para prever.
+                    Aumente as "Semanas de histórico" ou aguarde cartões chegarem à lista "Concluído".
+                </MudAlert>
+            }
+            @* A grade só entra com resultado: vazia, a margem negativa dela cobria metade do aviso acima. *@
+            @if (_previsaoQuando is not null || _previsaoQuantos is not null)
+            {
+            <MudGrid>
+                @if (_previsaoQuando is { } quando)
+                {
+                    <MudItem xs="12" md="6">
+                        <MudPaper Outlined="true" Class="pa-4">
+                            <MudText Typo="Typo.subtitle1">Quando terminam os @quando.Restantes cartões?</MudText>
+                            <div class="d-flex flex-wrap gap-6 mt-2">
+                                <div><MudText Typo="Typo.caption" Class="mud-text-secondary">50% de chance até</MudText><MudText Typo="Typo.h5">@quando.P50.ToString("dd/MM/yyyy")</MudText></div>
+                                <div><MudText Typo="Typo.caption" Class="mud-text-secondary">85% de chance até</MudText><MudText Typo="Typo.h5" Color="Color.Primary">@quando.P85.ToString("dd/MM/yyyy")</MudText></div>
+                                <div><MudText Typo="Typo.caption" Class="mud-text-secondary">95% de chance até</MudText><MudText Typo="Typo.h5">@quando.P95.ToString("dd/MM/yyyy")</MudText></div>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+                }
+                @if (_previsaoQuantos is { } quantos)
+                {
+                    <MudItem xs="12" md="6">
+                        <MudPaper Outlined="true" Class="pa-4">
+                            <MudText Typo="Typo.subtitle1">Quantos cartões até @quantos.DataAlvo.ToString("dd/MM/yyyy")?</MudText>
+                            <div class="d-flex flex-wrap gap-6 mt-2">
+                                <div><MudText Typo="Typo.caption" Class="mud-text-secondary">50% de chance de pelo menos</MudText><MudText Typo="Typo.h5">@quantos.P50</MudText></div>
+                                <div><MudText Typo="Typo.caption" Class="mud-text-secondary">85% de chance de pelo menos</MudText><MudText Typo="Typo.h5" Color="Color.Primary">@quantos.P85</MudText></div>
+                                <div><MudText Typo="Typo.caption" Class="mud-text-secondary">95% de chance de pelo menos</MudText><MudText Typo="Typo.h5">@quantos.P95</MudText></div>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
+            }
+        </MudTabPanel>
+
+        @* ── Prazos ── *@
+        <MudTabPanel Text="Prazos" Icon="@Icons.Material.Filled.EventAvailable">
+            @CabecalhoRelatorio("Cartões com prazo concluídos no período: quantos foram entregues até o prazo e o atraso médio dos que passaram.", ExportarPrazos)
+            @{ var geral = _prazosGeral.FirstOrDefault(); }
+            <MudGrid Class="mb-3">
+                @Numero("No prazo", geral is null ? "—" : $"{geral.PercentualNoPrazo:0}%", geral is null ? "sem entregas com prazo" : $"{geral.NoPrazo} de {geral.Entregues}")
+                @Numero("Atrasados", geral?.Atrasados.ToString() ?? "0", "entregues depois do prazo")
+                @Numero("Atraso médio", geral is null ? "—" : $"{geral.AtrasoMedioDias:0.0} d", "entre os atrasados")
+            </MudGrid>
+            <MudGrid>
+                <MudItem xs="12" md="6">@TabelaPrazos("Por sistema", _prazosSistema)</MudItem>
+                <MudItem xs="12" md="6">@TabelaPrazos("Por desenvolvedor", _prazosDesenvolvedor)</MudItem>
+            </MudGrid>
+        </MudTabPanel>
+
+        @* ── Desenvolvedores ── *@
+        <MudTabPanel Text="Desenvolvedores" Icon="@Icons.Material.Filled.Groups">
+            @CabecalhoRelatorio("Entregas no período e situação atual de cada pessoa (um cartão com dois desenvolvedores conta para ambos).", ExportarDesenvolvedores)
+            @if (_desenvolvedores.Count > 0)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-3">
+                    <MudChart ChartType="ChartType.Bar" ChartSeries="@(new List<ChartSeries> { new() { Name = "Concluídos no período", Data = _desenvolvedores.Take(15).Select(d => (double)d.Concluidos).ToArray() } })"
+                              XAxisLabels="@(_desenvolvedores.Take(15).Select(d => d.Desenvolvedor).ToArray())" ChartOptions="@Opcoes(1)" Width="100%" Height="300px" />
+                </MudPaper>
+            }
+            <MudTable Items="_desenvolvedores" Dense="true" Hover="true" RowsPerPage="@ItensPorPagina">
+                <HeaderContent>
+                    <MudTh>Desenvolvedor</MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaDesenvolvedor" SortBy="@(d => d.Concluidos)">Concluídos</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaDesenvolvedor" SortBy="@(d => d.Pontos)">Pontos</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaDesenvolvedor" SortBy="@(d => d.LeadTimeMedioDias)">Lead time médio (d)</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaDesenvolvedor" SortBy="@(d => d.Ativos)">Ativos</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="LinhaDesenvolvedor" SortBy="@(d => d.AtivosAtrasados)">Ativos atrasados</MudTableSortLabel></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Desenvolvedor</MudTd><MudTd>@context.Concluidos</MudTd><MudTd>@context.Pontos.ToString("0.##")</MudTd>
+                    <MudTd>@context.LeadTimeMedioDias.ToString("0.0")</MudTd><MudTd>@context.Ativos</MudTd><MudTd>@context.AtivosAtrasados</MudTd>
+                </RowTemplate>
+                <NoRecordsContent><MudText Class="mud-text-secondary">Nenhum cartão com desenvolvedor.</MudText></NoRecordsContent>
+                <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+            </MudTable>
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@code {
+    // Paleta categórica de referência (validada para daltonismo nesta ordem); cores seguem a série, nunca o ranking.
+    private static readonly string[] Paleta = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+
+    private List<Quadro> _quadros = [];
+    private List<Sistema> _sistemas = [];
+    private List<Usuario> _usuarios = [];
+    private int _quadroId;
+    private DateRange _periodo = new(DateTime.Today.AddDays(-89), DateTime.Today);
+    private int? _sistemaId;
+    private int? _desenvolvedorId;
+    private bool _carregando;
+
+    private DadosRelatorio? _dados;
+    private (List<string> Series, List<LinhaFluxo> Linhas) _fluxo = ([], []);
+    private List<LinhaVazao> _vazao = [];
+    private List<LinhaCiclo> _ciclos = [];
+    private Percentis _percentisLead = new(0, 0, 0, 0);
+    private Percentis _percentisCiclo = new(0, 0, 0, 0);
+    private List<(string Faixa, int Quantidade)> _histograma = [];
+    private List<LinhaEnvelhecimento> _envelhecimento = [];
+    private List<LinhaPrazo> _prazosGeral = [];
+    private List<LinhaPrazo> _prazosSistema = [];
+    private List<LinhaPrazo> _prazosDesenvolvedor = [];
+    private List<LinhaDesenvolvedor> _desenvolvedores = [];
+
+    private int _restantes = 10;
+    private int _semanasHistorico = 12;
+    private DateTime? _dataAlvo = DateTime.Today.AddDays(30);
+    private int[]? _amostras;
+    private PrevisaoQuando? _previsaoQuando;
+    private PrevisaoQuantos? _previsaoQuantos;
+
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _quadros = await Db.Quadros.AsNoTracking().Where(q => !q.Excluido).OrderBy(q => q.Nome).ToListAsync();
+        _sistemas = await Db.Sistemas.AsNoTracking().Where(s => s.Ativo).OrderBy(s => s.Nome).ToListAsync();
+        _usuarios = await Db.Usuarios.AsNoTracking().Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        if (_quadros.Count == 0) return;
+        _quadroId = _quadros[0].Id;
+        await Carregar();
+    }
+
+    private async Task Carregar()
+    {
+        if (_quadroId == 0) return;
+        _carregando = true;
+        try
+        {
+            var de = _periodo.Start ?? DateTime.Today.AddDays(-89);
+            var ate = _periodo.End ?? DateTime.Today;
+            _dados = await Servico.CarregarAsync(new FiltroRelatorio(_quadroId, de.Date, ate.Date, _sistemaId, _desenvolvedorId));
+            _fluxo = RelatoriosService.Fluxo(_dados);
+            _vazao = RelatoriosService.Vazao(_dados);
+            _ciclos = RelatoriosService.Ciclos(_dados);
+            _percentisLead = RelatoriosService.CalcularPercentis(_ciclos.Select(c => c.LeadTimeDias).ToList());
+            _percentisCiclo = RelatoriosService.CalcularPercentis(_ciclos.Where(c => c.CicloDias.HasValue).Select(c => c.CicloDias!.Value).ToList());
+            _histograma = RelatoriosService.Histograma(_ciclos.Select(c => c.LeadTimeDias).ToList());
+            _envelhecimento = RelatoriosService.Envelhecimento(_dados);
+            _prazosGeral = RelatoriosService.Prazos(_dados, _ => ["Geral"]);
+            _prazosSistema = RelatoriosService.Prazos(_dados, c => [c.Sistema?.Nome ?? "Sem sistema"]);
+            _prazosDesenvolvedor = RelatoriosService.Prazos(_dados, c => c.Desenvolvedores.Count == 0
+                ? ["Sem desenvolvedor"]
+                : c.Desenvolvedores.Select(d => _dados.Usuarios.GetValueOrDefault(d.UsuarioId) ?? $"#{d.UsuarioId}"));
+            _desenvolvedores = RelatoriosService.Desenvolvedores(_dados);
+            _restantes = Math.Max(1, _envelhecimento.Count);
+            Prever();
+        }
+        finally
+        {
+            _carregando = false;
+        }
+    }
+
+    private void Prever()
+    {
+        if (_dados is null) return;
+        _amostras = RelatoriosService.AmostrasSemanais(_dados, Math.Clamp(_semanasHistorico, 2, 52));
+        _previsaoQuando = RelatoriosService.PreverQuando(_amostras, _restantes);
+        _previsaoQuantos = _dataAlvo.HasValue ? RelatoriosService.PreverQuantos(_amostras, _dataAlvo.Value) : null;
+    }
+
+    private static ChartOptions Opcoes(int series) => new()
+    {
+        ChartPalette = Paleta.Take(Math.Max(1, series)).ToArray(),
+        ShowToolTips = true,
+        ShowLegend = series > 1,
+        LineStrokeWidth = 2,
+        YAxisTicks = 1,
+        MaxNumYAxisTicks = 8
+    };
+
+    private List<ChartSeries> SeriesFluxo => _fluxo.Series
+        .Select(s => new ChartSeries { Name = s, Data = _fluxo.Linhas.Select(l => (double)l.PorLista.GetValueOrDefault(s)).ToArray() })
+        .ToList();
+
+    // Rótulos esparsos para o eixo não ficar ilegível em períodos longos.
+    private string[] RotulosFluxo
+    {
+        get
+        {
+            var passo = Math.Max(1, (int)Math.Ceiling(_fluxo.Linhas.Count / 15.0));
+            return _fluxo.Linhas.Select((l, i) => i % passo == 0 ? l.Dia.ToString("dd/MM") : "").ToArray();
+        }
+    }
+
+    private RenderFragment CabecalhoRelatorio(string explicacao, Func<Task>? exportar) => __builder =>
+    {
+        <div class="d-flex align-start justify-space-between gap-3 mb-3">
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">@explicacao</MudText>
+            @if (exportar is not null)
+            {
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.FileDownload" OnClick="exportar" Class="flex-shrink-0">Excel</MudButton>
+            }
+        </div>
+    };
+
+    private static RenderFragment Numero(string titulo, string valor, string detalhe) => __builder =>
+    {
+        <MudItem xs="12" sm="6" md="3">
+            <MudPaper Outlined="true" Class="pa-4">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@titulo</MudText>
+                <MudText Typo="Typo.h4">@valor</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@detalhe</MudText>
+            </MudPaper>
+        </MudItem>
+    };
+
+    private RenderFragment TabelaPrazos(string titulo, List<LinhaPrazo> linhas) => __builder =>
+    {
+        <MudText Typo="Typo.subtitle1" Class="mb-1">@titulo</MudText>
+        <MudTable Items="linhas" Dense="true" Hover="true" RowsPerPage="@ItensPorPagina">
+            <HeaderContent><MudTh>Grupo</MudTh><MudTh>Entregues</MudTh><MudTh>No prazo</MudTh><MudTh>% no prazo</MudTh><MudTh>Atraso médio (d)</MudTh></HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Grupo</MudTd><MudTd>@context.Entregues</MudTd><MudTd>@context.NoPrazo</MudTd>
+                <MudTd>@context.PercentualNoPrazo.ToString("0")%</MudTd><MudTd>@context.AtrasoMedioDias.ToString("0.0")</MudTd>
+            </RowTemplate>
+            <NoRecordsContent><MudText Class="mud-text-secondary">Sem entregas com prazo no período.</MudText></NoRecordsContent>
+            <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+        </MudTable>
+    };
+
+    // ── Exportação ──
+
+    private async Task Baixar<T>(IEnumerable<T> linhas, string nome)
+    {
+        var bytes = await Exportacao.ExportarParaExcelAsync(linhas, nome);
+        await JS.InvokeVoidAsync("kanbanBaixarArquivo", $"{nome}.xlsx", Convert.ToBase64String(bytes),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    }
+
+    private Task ExportarFluxo()
+        => Baixar(_fluxo.Linhas.SelectMany(l => l.PorLista.Select(p => new { Data = l.Dia.ToString("dd/MM/yyyy"), Lista = p.Key, Cartoes = p.Value })), "fluxo-acumulado");
+
+    private Task ExportarVazao() => Baixar(_vazao.Select(v => new { Semana = v.Semana.ToString("dd/MM/yyyy"), v.Cartoes, v.Pontos }), "vazao");
+
+    private Task ExportarCiclos() => Baixar(_ciclos.Select(c => new
+    {
+        Cartao = c.Titulo, c.Sistema, c.Desenvolvedores, CriadoEm = c.CriadoEm.ToString("dd/MM/yyyy"),
+        IniciadoEm = c.IniciadoEm?.ToString("dd/MM/yyyy") ?? "", ConcluidoEm = c.ConcluidoEm.ToString("dd/MM/yyyy"),
+        LeadTimeDias = Math.Round(c.LeadTimeDias, 1), CicloDias = c.CicloDias.HasValue ? Math.Round(c.CicloDias.Value, 1).ToString() : ""
+    }), "tempo-de-ciclo");
+
+    private Task ExportarEnvelhecimento() => Baixar(_envelhecimento.Select(e => new
+    {
+        Cartao = e.Titulo, e.Lista, e.Desenvolvedores, e.DiasNaLista, e.IdadeDias, Prazo = e.Prazo?.ToString("dd/MM/yyyy") ?? "", Atrasado = e.Atrasado ? "Sim" : "Não"
+    }), "envelhecimento");
+
+    private Task ExportarPrazos() => Baixar(_prazosSistema.Select(p => new { Tipo = "Sistema", p.Grupo, p.Entregues, p.NoPrazo, p.Atrasados, PercentualNoPrazo = Math.Round(p.PercentualNoPrazo, 1), AtrasoMedioDias = Math.Round(p.AtrasoMedioDias, 1) })
+        .Concat(_prazosDesenvolvedor.Select(p => new { Tipo = "Desenvolvedor", p.Grupo, p.Entregues, p.NoPrazo, p.Atrasados, PercentualNoPrazo = Math.Round(p.PercentualNoPrazo, 1), AtrasoMedioDias = Math.Round(p.AtrasoMedioDias, 1) })), "prazos");
+
+    private Task ExportarDesenvolvedores() => Baixar(_desenvolvedores.Select(d => new
+    {
+        d.Desenvolvedor, d.Concluidos, d.Pontos, LeadTimeMedioDias = Math.Round(d.LeadTimeMedioDias, 1), d.Ativos, d.AtivosAtrasados
+    }), "desenvolvedores");
+}

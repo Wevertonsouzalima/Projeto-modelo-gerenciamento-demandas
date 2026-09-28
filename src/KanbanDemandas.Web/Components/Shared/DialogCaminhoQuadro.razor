@@ -1,0 +1,102 @@
+@inject KanbanDbContext Db
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Marque as listas que fazem parte do caminho e ordene as etapas. As colunas do quadro passam a seguir essa ordem
+            e não podem ser reordenadas contra ela. Mover um cartão para fora do caminho continua permitido, mas gera um aviso.
+        </MudText>
+        @for (var i = 0; i < _itens.Count; i++)
+        {
+            var item = _itens[i];
+            var indice = i;
+            <MudPaper Class="d-flex align-center gap-2 pa-2 mb-2" Outlined="true">
+                <MudCheckBox T="bool" Value="item.NoCaminho" ValueChanged="@(v => item.NoCaminho = v)" />
+                <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="width: 24px">@(item.NoCaminho ? PosicaoNoCaminho(item).ToString() : "")</MudText>
+                <MudText Class="flex-grow-1">@item.Nome</MudText>
+                <MudTooltip Text="Subir etapa">
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" Disabled="@(indice == 0)" OnClick="@(() => Mover(indice, -1))" />
+                </MudTooltip>
+                <MudTooltip Text="Descer etapa">
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" Disabled="@(indice == _itens.Count - 1)" OnClick="@(() => Mover(indice, 1))" />
+                </MudTooltip>
+            </MudPaper>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Limpar" Color="Color.Error">Remover caminho</MudButton>
+        <MudSpacer />
+        <MudButton OnClick="@(() => MudDialog.Cancel())">Cancelar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Salvar">Salvar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int QuadroId { get; set; }
+
+    private sealed class ItemCaminho
+    {
+        public required Lista Lista { get; init; }
+        public required string Nome { get; init; }
+        public bool NoCaminho { get; set; }
+    }
+
+    private List<Lista> _listas = [];
+    private List<ItemCaminho> _itens = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _listas = await Db.Listas.Where(l => l.QuadroId == QuadroId && !l.Excluido).ToListAsync();
+        var ordemVisual = new List<ItemCaminho>();
+        AdicionarEmOrdemVisual(null, null, ordemVisual);
+        _itens = ordemVisual
+            .OrderBy(i => i.Lista.OrdemFluxo.HasValue ? 0 : 1)
+            .ThenBy(i => i.Lista.OrdemFluxo)
+            .ToList();
+    }
+
+    private void AdicionarEmOrdemVisual(int? paiId, string? prefixo, List<ItemCaminho> destino)
+    {
+        foreach (var lista in _listas.Where(l => l.ListaPaiId == paiId).OrderBy(l => l.Ordem))
+        {
+            var nome = prefixo is null ? lista.Nome : $"{prefixo} › {lista.Nome}";
+            destino.Add(new ItemCaminho { Lista = lista, Nome = nome, NoCaminho = lista.OrdemFluxo.HasValue });
+            AdicionarEmOrdemVisual(lista.Id, nome, destino);
+        }
+    }
+
+    private int PosicaoNoCaminho(ItemCaminho item) => _itens.Where(i => i.NoCaminho).ToList().IndexOf(item) + 1;
+
+    private void Mover(int indice, int deslocamento)
+    {
+        var novo = indice + deslocamento;
+        if (novo < 0 || novo >= _itens.Count) return;
+        (_itens[indice], _itens[novo]) = (_itens[novo], _itens[indice]);
+    }
+
+    private void Limpar()
+    {
+        foreach (var item in _itens) item.NoCaminho = false;
+    }
+
+    private async Task Salvar()
+    {
+        var posicao = 1;
+        foreach (var item in _itens)
+            item.Lista.OrdemFluxo = item.NoCaminho ? posicao++ : null;
+
+        foreach (var grupo in _listas.GroupBy(l => l.ListaPaiId))
+        {
+            var irmas = grupo.OrderBy(l => l.Ordem).Select(l => l.Id).ToList();
+            var ordenadas = CaminhoQuadro.OrdenarPeloCaminho(irmas, _listas);
+            for (var i = 0; i < ordenadas.Count; i++)
+                _listas.First(l => l.Id == ordenadas[i]).Ordem = i;
+        }
+
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Caminho salvo.", Severity.Success);
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+}

@@ -1,0 +1,233 @@
+@page "/solicitacoes/{Id:int}"
+@inject PortalService Portal
+@inject SessaoUsuario Sessao
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>@(_detalhe is null ? "Solicitação" : $"{_detalhe.Codigo} — {_detalhe.Titulo}")</PageTitle>
+
+<MudButton Href="/" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" Class="mb-2">Minhas solicitações</MudButton>
+
+@if (_carregando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_detalhe is null)
+{
+    <MudAlert Severity="Severity.Warning">Solicitação não encontrada. Só aparecem aqui as solicitações abertas por você.</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+        <div class="d-flex flex-wrap align-center gap-2">
+            <MudText Typo="Typo.body2" Style="font-family:monospace">@_detalhe.Codigo</MudText>
+            <MudChip T="string" Color="@(_detalhe.Concluida ? Color.Success : Color.Info)"
+                     Icon="@(_detalhe.Concluida ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Schedule)">@_detalhe.Status</MudChip>
+        </div>
+        <MudText Typo="Typo.h5" Class="mt-1">@_detalhe.Titulo</MudText>
+        <MudText Typo="Typo.caption">Aberta em @_detalhe.CriadaEm.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</MudText>
+
+        @if (_detalhe.Informacoes.Count > 0)
+        {
+            <MudGrid Spacing="2" Class="mt-2">
+                @foreach (var (nome, valor) in _detalhe.Informacoes)
+                {
+                    <MudItem xs="12" sm="6" md="4">
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@nome</MudText>
+                        <MudText Typo="Typo.body2">@valor</MudText>
+                    </MudItem>
+                }
+            </MudGrid>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_detalhe.Descricao))
+        {
+            <MudDivider Class="my-3" />
+            <MudText Typo="Typo.subtitle2">Descrição</MudText>
+            <MudText Typo="Typo.body2" Class="portal-descricao">@_detalhe.Descricao</MudText>
+        }
+    </MudPaper>
+
+    <MudGrid Spacing="3">
+        <MudItem xs="12" md="@(_detalhe.HistoricoStatus.Count > 0 ? 8 : 12)">
+            @if (_config.Ve(CamposPortal.Comentarios))
+            {
+                <MudPaper Class="pa-4 mb-4" Elevation="0" Outlined="true">
+                    <MudText Typo="Typo.h6" Class="mb-2">Conversa com o time</MudText>
+                    @if (_detalhe.Mensagens.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">Nenhuma mensagem ainda.</MudText>
+                    }
+                    <div class="d-flex flex-column gap-2">
+                        @foreach (var mensagem in _detalhe.Mensagens)
+                        {
+                            <MudPaper Class="@($"pa-3 portal-mensagem {(mensagem.DoSolicitante ? "portal-mensagem-minha" : "")}")" Elevation="0" Outlined="true">
+                                <MudText Typo="Typo.caption"><b>@mensagem.Autor</b> · @mensagem.Em.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</MudText>
+                                <MudText Typo="Typo.body2">@mensagem.Texto</MudText>
+                            </MudPaper>
+                        }
+                    </div>
+                    @if (!_config.PermitirComentarios)
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">
+                            <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Style="vertical-align:middle" />
+                            Aqui aparecem as respostas do time. O envio de mensagens pelo portal está desativado.
+                        </MudText>
+                    }
+                    else if (_detalhe.Concluida)
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-3">Solicitação concluída: não recebe novas mensagens. Se precisar de algo mais, abra uma nova.</MudText>
+                    }
+                    else
+                    {
+                        <MudTextField @bind-Value="_mensagem" Label="Escreva uma mensagem para o time" Lines="3" Class="mt-3" MaxLength="4000" Immediate="true" />
+                        <div class="d-flex justify-end mt-2">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send"
+                                       Disabled="@(string.IsNullOrWhiteSpace(_mensagem) || _enviando)" OnClick="EnviarMensagemAsync">Enviar</MudButton>
+                        </div>
+                    }
+                </MudPaper>
+            }
+
+            <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                <div class="d-flex align-center mb-2">
+                    <MudText Typo="Typo.h6">Anexos</MudText>
+                    <MudSpacer />
+                    @if (_config.PermitirAnexos && !_detalhe.Concluida)
+                    {
+                        <MudFileUpload T="IReadOnlyList<IBrowserFile>" FilesChanged="AnexarAsync" MaximumFileCount="10">
+                            <ActivatorContent>
+                                <MudButton Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.AttachFile" Disabled="_enviando">Adicionar</MudButton>
+                            </ActivatorContent>
+                        </MudFileUpload>
+                    }
+                </div>
+                @if (_detalhe.Anexos.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">Nenhum anexo.</MudText>
+                }
+                <MudList T="int" Dense="true">
+                    @foreach (var anexo in _detalhe.Anexos)
+                    {
+                        <MudListItem T="int" Icon="@Icons.Material.Filled.InsertDriveFile" OnClick="@(() => BaixarAsync(anexo))">
+                            <div class="d-flex align-center gap-2">
+                                <MudText Typo="Typo.body2">@anexo.Nome</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                    @Formatacao.Tamanho(anexo.Tamanho) · @(anexo.DoSolicitante ? "enviado por você" : "enviado pelo time") · @anexo.Em.ToLocalTime().ToString("dd/MM/yyyy")
+                                </MudText>
+                            </div>
+                        </MudListItem>
+                    }
+                </MudList>
+            </MudPaper>
+        </MudItem>
+
+        @if (_detalhe.HistoricoStatus.Count > 0)
+        {
+            <MudItem xs="12" md="4">
+                <MudPaper Class="pa-4" Elevation="0" Outlined="true">
+                    <MudText Typo="Typo.h6" Class="mb-2">Andamento</MudText>
+                    <MudTimeline TimelinePosition="TimelinePosition.Start" Class="pa-0">
+                        @foreach (var passo in _detalhe.HistoricoStatus.Reverse())
+                        {
+                            <MudTimelineItem Size="Size.Small" Color="@(passo == _detalhe.HistoricoStatus[^1] ? Color.Primary : Color.Default)">
+                                <MudText Typo="Typo.body2"><b>@passo.Status</b></MudText>
+                                <MudText Typo="Typo.caption">@passo.Em.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</MudText>
+                            </MudTimelineItem>
+                        }
+                    </MudTimeline>
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private ConfiguracaoDoPortal _config = default!;
+    private DetalheSolicitacao? _detalhe;
+    private string? _mensagem;
+    private bool _carregando = true;
+    private bool _enviando;
+
+    protected override void OnInitialized()
+    {
+        _config = Portal.Configuracao;
+        Sessao.OnChange += AoTrocarUsuario;
+    }
+
+    protected override async Task OnParametersSetAsync() => await CarregarAsync();
+
+    private async Task CarregarAsync()
+    {
+        _carregando = true;
+        _detalhe = Sessao.UsuarioId is int usuarioId ? await Portal.ObterAsync(Id, usuarioId) : null;
+        _carregando = false;
+    }
+
+    private async Task EnviarMensagemAsync()
+    {
+        if (Sessao.UsuarioId is not int usuarioId || string.IsNullOrWhiteSpace(_mensagem)) return;
+        _enviando = true;
+        try
+        {
+            await Portal.EnviarMensagemAsync(Id, usuarioId, _mensagem);
+            _mensagem = null;
+            await CarregarAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _enviando = false;
+        }
+    }
+
+    private async Task AnexarAsync(IReadOnlyList<IBrowserFile>? arquivos)
+    {
+        if (Sessao.UsuarioId is not int usuarioId || arquivos is not { Count: > 0 }) return;
+        _enviando = true;
+        try
+        {
+            var limite = _config.LimiteMbArquivo * 1024L * 1024L;
+            await Portal.AnexarAsync(Id, usuarioId, arquivos.Select(a => new ArquivoEnviado(a.Name,
+                string.IsNullOrEmpty(a.ContentType) ? "application/octet-stream" : a.ContentType, a.Size, () => a.OpenReadStream(limite))).ToList());
+            Snackbar.Add(arquivos.Count == 1 ? "Arquivo anexado." : $"{arquivos.Count} arquivos anexados.", Severity.Success);
+            await CarregarAsync();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            _enviando = false;
+        }
+    }
+
+    private async Task BaixarAsync(AnexoSolicitacao anexo)
+    {
+        if (Sessao.UsuarioId is not int usuarioId) return;
+        var arquivo = await Portal.AbrirAnexoAsync(anexo.Id, usuarioId);
+        if (arquivo is null)
+        {
+            Snackbar.Add("Este anexo não está mais disponível.", Severity.Warning);
+            return;
+        }
+        await using var conteudo = arquivo.Value.Conteudo;
+        using var referencia = new DotNetStreamReference(conteudo);
+        await JS.InvokeVoidAsync("portalBaixarArquivo", arquivo.Value.Nome, referencia);
+    }
+
+    private void AoTrocarUsuario() => _ = InvokeAsync(async () =>
+    {
+        await CarregarAsync();
+        StateHasChanged();
+    });
+
+    public void Dispose() => Sessao.OnChange -= AoTrocarUsuario;
+}

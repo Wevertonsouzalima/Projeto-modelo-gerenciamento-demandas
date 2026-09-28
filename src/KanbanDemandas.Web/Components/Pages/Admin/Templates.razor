@@ -1,0 +1,89 @@
+@page "/admin/templates"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+@inject IConfiguration Configuracao
+
+<PageTitle>Templates de Quadro</PageTitle>
+<MudText Typo="Typo.h5" Class="mb-4">Templates</MudText>
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6">Template de quadro</MudText>
+            <MudTextField @bind-Value="_nomeQuadro" Label="Nome" Class="mt-2" />
+            <MudTextField @bind-Value="_descricaoQuadro" Label="Descrição" Class="mt-2" />
+            <MudTextField @bind-Value="_estrutura" Label="Estrutura JSON" Lines="8" Class="mt-2"
+                          HelperText="Ex.: {&quot;listas&quot;:[{&quot;nome&quot;:&quot;Backlog&quot;,&quot;backlog&quot;:true},{&quot;nome&quot;:&quot;Homologação&quot;,&quot;limiteWip&quot;:5,&quot;campos&quot;:[{&quot;nome&quot;:&quot;Data Homologado&quot;,&quot;tipo&quot;:&quot;Data&quot;,&quot;obrigatorio&quot;:true}],&quot;sublistas&quot;:[{&quot;nome&quot;:&quot;Pull Request&quot;}]}]}" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SalvarQuadro" Class="mt-3">Salvar template</MudButton>
+        </MudPaper>
+        <MudTable Items="_templatesQuadro" RowsPerPage="@ItensPorPagina" Dense="true" Class="mt-3">
+            <HeaderContent><MudTh>Nome</MudTh><MudTh>Descrição</MudTh></HeaderContent>
+            <RowTemplate><MudTd>@context.Nome</MudTd><MudTd>@context.Descricao</MudTd></RowTemplate>
+            <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+        </MudTable>
+    </MudItem>
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6">Template de cartão</MudText>
+            <MudSelect T="int" @bind-Value="_quadroCartaoId" ToStringFunc="@(id => _quadros.FirstOrDefault(q => q.Id == id)?.Nome)" Label="Quadro" Class="mt-2">
+                @foreach (var quadro in _quadros) { <MudSelectItem Value="@quadro.Id">@quadro.Nome</MudSelectItem> }
+            </MudSelect>
+            <MudTextField @bind-Value="_nomeCartao" Label="Nome" Class="mt-2" />
+            <MudTextField @bind-Value="_tituloPadrao" Label="Título padrão" Class="mt-2" />
+            <MudTextField @bind-Value="_descricaoPadrao" Label="Descrição padrão" Lines="3" Class="mt-2" />
+            <MudTextField @bind-Value="_itensTarefaPadrao" Label="Itens de tarefa padrão (JSON, ex.: [&quot;Item 1&quot;,&quot;Item 2&quot;])" Lines="2" Class="mt-2" />
+            <MudTextField @bind-Value="_camposPadrao" Label="Campos padrão (JSON, ex.: {&quot;Nome do campo&quot;:&quot;valor&quot;})" Lines="2" Class="mt-2" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SalvarCartao" Class="mt-3">Salvar template</MudButton>
+        </MudPaper>
+        <MudTable Items="_templatesCartao" RowsPerPage="@ItensPorPagina" Dense="true" Class="mt-3">
+            <HeaderContent><MudTh>Nome</MudTh><MudTh>Quadro</MudTh></HeaderContent>
+            <RowTemplate><MudTd>@context.Nome</MudTd><MudTd>@context.Quadro.Nome</MudTd></RowTemplate>
+            <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+        </MudTable>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    private List<TemplateQuadro> _templatesQuadro = [];
+    private List<TemplateCartao> _templatesCartao = [];
+    private List<Quadro> _quadros = [];
+    private string _nomeQuadro = string.Empty, _nomeCartao = string.Empty, _tituloPadrao = string.Empty, _estrutura = "{}";
+    private string? _descricaoQuadro, _descricaoPadrao, _itensTarefaPadrao, _camposPadrao;
+    private int _quadroCartaoId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _quadros = await Db.Quadros.OrderBy(q => q.Nome).ToListAsync();
+        _quadroCartaoId = _quadros.FirstOrDefault()?.Id ?? 0;
+        await Carregar();
+    }
+
+    private async Task Carregar()
+    {
+        _templatesQuadro = await Db.TemplatesQuadro.OrderBy(t => t.Nome).ToListAsync();
+        _templatesCartao = await Db.TemplatesCartao.Include(t => t.Quadro).OrderBy(t => t.Nome).ToListAsync();
+    }
+
+    private async Task SalvarQuadro()
+    {
+        if (string.IsNullOrWhiteSpace(_nomeQuadro)) return;
+        Db.TemplatesQuadro.Add(new TemplateQuadro { Nome = _nomeQuadro.Trim(), Descricao = _descricaoQuadro?.Trim(), EstruturaJson = string.IsNullOrWhiteSpace(_estrutura) ? "{}" : _estrutura, CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow });
+        await Db.SaveChangesAsync(); await Carregar(); Snackbar.Add("Template de quadro salvo.", Severity.Success);
+    }
+
+    private async Task SalvarCartao()
+    {
+        if (_quadroCartaoId == 0 || string.IsNullOrWhiteSpace(_nomeCartao)) return;
+        Db.TemplatesCartao.Add(new TemplateCartao
+        {
+            Nome = _nomeCartao.Trim(), TitulopadraO = _tituloPadrao.Trim(), DescricaoPadrao = _descricaoPadrao?.Trim(),
+            ItensTarefaPadrao = string.IsNullOrWhiteSpace(_itensTarefaPadrao) ? null : _itensTarefaPadrao.Trim(),
+            CamposPadrao = string.IsNullOrWhiteSpace(_camposPadrao) ? null : _camposPadrao.Trim(),
+            QuadroId = _quadroCartaoId, CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        });
+        await Db.SaveChangesAsync(); await Carregar(); Snackbar.Add("Template de cartão salvo.", Severity.Success);
+    }
+}

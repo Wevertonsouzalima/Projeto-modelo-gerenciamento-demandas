@@ -1,0 +1,81 @@
+@inject MotorAutomacoes Motor
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject IDialogService Dialog
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        @if (_alvos is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mb-3">
+                Simulação sem alterar nada: cartões que a regra alcançaria <b>agora</b> e o que aconteceria com cada um.
+                Gatilhos de evento mostram os cartões que já estão na situação; na prática, a regra roda quando o evento acontecer.
+            </MudText>
+            @if (_alvos.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info">Nenhum cartão atende ao gatilho e às condições neste momento.</MudAlert>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2">@_alvos.Count(a => a.CartaoId.HasValue) cartão(ões) afetado(s)</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Bordered="true" Style="max-height: 60vh; overflow-y: auto">
+                    <thead>
+                        <tr><th>Cartão</th><th>Situação</th><th>Ações</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var alvo in _alvos)
+                        {
+                            <tr>
+                                <td><b>@alvo.Titulo</b></td>
+                                <td>@alvo.Situacao</td>
+                                <td>@string.Join("; ", alvo.Acoes)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => MudDialog.Close())">Fechar</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.PlayArrow"
+                   Disabled="@(_alvos is null || _alvos.Count == 0 || _executando)" OnClick="ExecutarAgora">Executar agora</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int RegraId { get; set; }
+
+    private List<AlvoSimulacao>? _alvos;
+    private bool _executando;
+
+    protected override async Task OnInitializedAsync() => _alvos = await Motor.SimularAsync(RegraId);
+
+    private async Task ExecutarAgora()
+    {
+        var confirmado = await Dialog.ShowMessageBox("Executar agora",
+            "As ações serão aplicadas de verdade nos cartões listados (e o resumo, se houver, enviado). Cada execução pode ser desfeita no histórico. Continuar?",
+            yesText: "Executar", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        _executando = true;
+        try
+        {
+            var total = await Motor.ExecutarAgoraAsync(RegraId, UsuarioProvider.ObterIdUsuarioAtual());
+            Snackbar.Add($"Regra executada em {total} cartão(ões). Veja o resultado no histórico.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Falha ao executar: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _executando = false;
+        }
+    }
+}

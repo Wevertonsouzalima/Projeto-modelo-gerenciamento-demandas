@@ -1,0 +1,223 @@
+@page "/sprints"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IConfiguration Configuracao
+
+<PageTitle>Sprints</PageTitle>
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h5">Sprints</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AbrirFormulario">Nova sprint</MudButton>
+</div>
+
+@if (_formularioAberto)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Typo="Typo.h6">Nova sprint</MudText>
+        <div class="d-flex flex-wrap gap-3 mt-3">
+            <MudSelect T="int" @bind-Value="_quadroId" ToStringFunc="@(id => _quadros.FirstOrDefault(q => q.Id == id)?.Nome)" Label="Quadro" Required="true" Style="min-width: 220px">
+                @foreach (var quadro in _quadros)
+                {
+                    <MudSelectItem Value="@quadro.Id">@quadro.Nome</MudSelectItem>
+                }
+            </MudSelect>
+            <MudTextField @bind-Value="_nome" Label="Nome" Required="true" />
+            <MudDatePicker @bind-Date="_inicio" Label="Início" />
+            <MudDatePicker @bind-Date="_fim" Label="Fim" />
+        </div>
+        <MudTextField @bind-Value="_meta" Label="Meta da sprint" Lines="2" Class="mt-3" />
+        <div class="d-flex gap-2 mt-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Salvar">Salvar</MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="Cancelar">Cancelar</MudButton>
+        </div>
+    </MudPaper>
+}
+
+<MudTable Items="_sprints" RowsPerPage="@ItensPorPagina" Hover="true" Striped="true" Dense="true">
+    <HeaderContent>
+        <MudTh>Nome</MudTh><MudTh>Quadro</MudTh><MudTh>Período</MudTh><MudTh>Status</MudTh><MudTh>Meta</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd><MudButton Variant="Variant.Text" OnClick="@(() => SelecionarSprint(context))">@context.Nome</MudButton></MudTd>
+        <MudTd>@context.Quadro.Nome</MudTd>
+        <MudTd>@context.DataInicio.ToLocalTime().ToString("dd/MM/yyyy") - @context.DataFim.ToLocalTime().ToString("dd/MM/yyyy")</MudTd>
+        <MudTd><MudChip T="string" Size="Size.Small" Color="CorStatus(context)">@Status(context)</MudChip></MudTd>
+        <MudTd>@context.Meta</MudTd>
+        <MudTd>
+            @if (!context.Fechada)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Lock" Size="Size.Small" OnClick="@(() => AbrirFechamento(context))" />
+            }
+        </MudTd>
+        <MudTd><MudIconButton Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" OnClick="@(() => Nav.NavigateTo($"/sprints/{context.Id}"))" /></MudTd>
+    </RowTemplate>
+    <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+</MudTable>
+
+@if (_sprintFechando is not null)
+{
+    <MudPaper Class="pa-4 mt-4" Elevation="1">
+        <MudText Typo="Typo.h6">Fechar sprint "@_sprintFechando.Nome"</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">Cartões não concluídos serão movidos para:</MudText>
+        <MudRadioGroup T="string" @bind-Value="_destinoFechamento" Class="mt-2">
+            <MudRadio Value="@("backlog")">Backlog do quadro</MudRadio>
+            <MudRadio Value="@("sprint")" Disabled="@(_outrasSprints.Count == 0)">Outra sprint</MudRadio>
+        </MudRadioGroup>
+        @if (_destinoFechamento == "sprint")
+        {
+            <MudSelect T="int" @bind-Value="_sprintDestinoId" ToStringFunc="@(id => _outrasSprints.FirstOrDefault(s => s.Id == id)?.Nome)" Label="Sprint destino" Style="min-width:220px">
+                @foreach (var s in _outrasSprints)
+                {
+                    <MudSelectItem Value="@s.Id">@s.Nome</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        <div class="d-flex gap-2 mt-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="ConfirmarFechamento">Confirmar fechamento</MudButton>
+            <MudButton Variant="Variant.Outlined" OnClick="@(() => _sprintFechando = null)">Cancelar</MudButton>
+        </div>
+    </MudPaper>
+}
+
+@if (_sprintSelecionada is not null)
+{
+    <MudPaper Class="pa-4 mt-4" Elevation="1">
+        <div class="d-flex align-center justify-space-between">
+            <div>
+                <MudText Typo="Typo.h6">Cartões de @_sprintSelecionada.Nome</MudText>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">@_cartoesSelecionados.Count cartão(ões) vinculado(s)</MudText>
+            </div>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SalvarVinculos">Salvar cartões</MudButton>
+        </div>
+        <MultiSelecaoFiltro Label="Cartões do backlog" Class="mt-3"
+                            Opcoes="@(_cartoesQuadro.Select(c => new OpcaoSelecao(c.Id, c.Titulo)).ToList())"
+                            Selecionados="_cartoesSelecionados" SelecionadosChanged="SelecionarCartoes" />
+    </MudPaper>
+}
+
+@code {
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    private List<Sprint> _sprints = [];
+    private List<Quadro> _quadros = [];
+    private bool _formularioAberto;
+    private int _quadroId;
+    private string _nome = string.Empty;
+    private string? _meta;
+    private DateTime? _inicio = DateTime.Today;
+    private DateTime? _fim = DateTime.Today.AddDays(14);
+    private Sprint? _sprintSelecionada;
+    private List<Cartao> _cartoesQuadro = [];
+    private HashSet<int> _cartoesSelecionados = [];
+    private Sprint? _sprintFechando;
+    private string _destinoFechamento = "backlog";
+    private int _sprintDestinoId;
+    private List<Sprint> _outrasSprints = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _quadros = await Db.Quadros.OrderBy(q => q.Nome).ToListAsync();
+        await Carregar();
+    }
+
+    private async Task Carregar()
+        => _sprints = await Db.Sprints.Include(s => s.Quadro).OrderByDescending(s => s.DataInicio).ToListAsync();
+
+    private void AbrirFormulario()
+    {
+        _formularioAberto = true;
+        _quadroId = _quadros.FirstOrDefault()?.Id ?? 0;
+    }
+
+    private async Task Salvar()
+    {
+        if (_quadroId == 0 || string.IsNullOrWhiteSpace(_nome) || !_inicio.HasValue || !_fim.HasValue || _fim < _inicio)
+        {
+            Snackbar.Add("Informe quadro, nome e um período válido.", Severity.Warning);
+            return;
+        }
+
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        Db.Sprints.Add(new Sprint
+        {
+            QuadroId = _quadroId, Nome = _nome.Trim(), Meta = _meta?.Trim(),
+            DataInicio = _inicio.Value.ToUniversalTime(), DataFim = _fim.Value.ToUniversalTime(),
+            Ativa = _inicio.Value.Date <= DateTime.Today && _fim.Value.Date >= DateTime.Today,
+            CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+        });
+        await Db.SaveChangesAsync();
+        await Carregar();
+        Cancelar();
+        Snackbar.Add("Sprint criada.", Severity.Success);
+    }
+
+    private void Cancelar() => _formularioAberto = false;
+
+    private async Task SelecionarSprint(Sprint sprint)
+    {
+        _sprintSelecionada = sprint;
+        _cartoesQuadro = await Db.Cartoes.Where(c => c.Lista.QuadroId == sprint.QuadroId && !c.Excluido).OrderBy(c => c.Titulo).ToListAsync();
+        _cartoesSelecionados = (await Db.SprintCartoes.Where(sc => sc.SprintId == sprint.Id).Select(sc => sc.CartaoId).ToListAsync()).ToHashSet();
+    }
+
+    private void SelecionarCartoes(IEnumerable<int> valores) => _cartoesSelecionados = valores.ToHashSet();
+
+    private async Task SalvarVinculos()
+    {
+        if (_sprintSelecionada is null) return;
+        var atuais = await Db.SprintCartoes.Where(sc => sc.SprintId == _sprintSelecionada.Id).ToListAsync();
+        Db.SprintCartoes.RemoveRange(atuais);
+        Db.SprintCartoes.AddRange(_cartoesSelecionados.Select(id => new SprintCartao
+        {
+            SprintId = _sprintSelecionada.Id, CartaoId = id, AdicionadoEm = DateTime.UtcNow
+        }));
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Cartões vinculados à sprint.", Severity.Success);
+    }
+
+    private async Task AbrirFechamento(Sprint sprint)
+    {
+        _sprintFechando = sprint;
+        _destinoFechamento = "backlog";
+        _outrasSprints = await Db.Sprints.Where(s => s.QuadroId == sprint.QuadroId && s.Id != sprint.Id && !s.Fechada).OrderByDescending(s => s.DataInicio).ToListAsync();
+        _sprintDestinoId = _outrasSprints.FirstOrDefault()?.Id ?? 0;
+    }
+
+    private async Task ConfirmarFechamento()
+    {
+        if (_sprintFechando is null) return;
+        await FecharSprint(_sprintFechando, _destinoFechamento == "sprint" && _sprintDestinoId != 0 ? _sprintDestinoId : null);
+        _sprintFechando = null;
+    }
+
+    private async Task FecharSprint(Sprint sprint, int? sprintDestinoId)
+    {
+        var backlogId = await Db.Listas.Where(l => l.QuadroId == sprint.QuadroId && l.EhBacklog && !l.Excluido).Select(l => (int?)l.Id).FirstOrDefaultAsync();
+        var vinculos = await Db.SprintCartoes.Include(sc => sc.Cartao).ThenInclude(c => c.Lista).Where(sc => sc.SprintId == sprint.Id).ToListAsync();
+        foreach (var vinculo in vinculos)
+        {
+            if (vinculo.Cartao.Lista.Nome.Equals("Concluído", StringComparison.OrdinalIgnoreCase)) continue;
+            if (sprintDestinoId.HasValue)
+            {
+                Db.SprintCartoes.Remove(vinculo);
+                Db.SprintCartoes.Add(new SprintCartao { SprintId = sprintDestinoId.Value, CartaoId = vinculo.CartaoId, AdicionadoEm = DateTime.UtcNow });
+            }
+            else if (backlogId.HasValue)
+            {
+                vinculo.Cartao.ListaId = backlogId.Value;
+            }
+        }
+        sprint.Fechada = true;
+        sprint.Ativa = false;
+        await Db.SaveChangesAsync();
+        await Carregar();
+        Snackbar.Add(sprintDestinoId.HasValue ? "Sprint fechada; cartões não concluídos movidos para a nova sprint." : "Sprint fechada; cartões não concluídos retornaram ao backlog.", Severity.Success);
+    }
+
+    private static string Status(Sprint sprint)
+        => sprint.Fechada ? "Fechada" : sprint.Ativa ? "Ativa" : sprint.DataInicio > DateTime.UtcNow ? "Planejada" : "Encerrada";
+
+    private static Color CorStatus(Sprint sprint) => sprint.Fechada ? Color.Default : sprint.Ativa ? Color.Success : Color.Info;
+}

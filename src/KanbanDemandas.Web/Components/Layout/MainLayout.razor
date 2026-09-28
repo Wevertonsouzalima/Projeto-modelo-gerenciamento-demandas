@@ -1,0 +1,150 @@
+@inherits LayoutComponentBase
+@inject SessaoUsuario Sessao
+@inject KanbanDbContext Db
+@inject NavigationManager Nav
+@inject PublicadorAlteracoesTempoReal Publicador
+@inject IServiceScopeFactory ScopeFactory
+@implements IDisposable
+
+<MudThemeProvider Theme="_tema" />
+<MudPopoverProvider />
+<MudDialogProvider FullWidth="true" MaxWidth="MaxWidth.Medium" />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Color="Color.Primary">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                       Color="Color.Inherit"
+                       Edge="Edge.Start"
+                       OnClick="@ToggleDrawer" />
+
+        <MudText Typo="Typo.h6" Class="ml-2">Gestão de Demandas</MudText>
+
+        <MudSpacer />
+
+        @* Busca global *@
+        <MudTextField @bind-Value="_termoBusca"
+                      Placeholder="Buscar cartões..."
+                      Adornment="Adornment.End"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      OnAdornmentClick="BuscarGlobal"
+                      Class="mt-0 mr-2"
+                      Style="max-width:280px"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      OnKeyUp="@((e) => { if (e.Key == "Enter") BuscarGlobal(); })" />
+
+        @* Notificações *@
+        <MudBadge Content="@_notificacoesNaoLidas" Color="Color.Error"
+                  Overlap="true" Visible="@(_notificacoesNaoLidas > 0)">
+            <MudIconButton Icon="@Icons.Material.Filled.Notifications"
+                           Color="Color.Inherit"
+                           Href="/notificacoes" />
+        </MudBadge>
+
+        @* Seletor de usuário (stub v1) *@
+        <MudMenu Icon="@Icons.Material.Filled.AccountCircle"
+                 Color="Color.Inherit"
+                 AnchorOrigin="Origin.BottomRight"
+                 TransformOrigin="Origin.TopRight">
+            <MudMenuItem Disabled="true">
+                <MudText Typo="Typo.caption">Usuário atual (v1 — sem login)</MudText>
+            </MudMenuItem>
+            <MudDivider />
+            @foreach (var u in _usuarios)
+            {
+                <MudMenuItem OnClick="@(() => SelecionarUsuario(u.Id))"
+                             Icon="@(Sessao.UsuarioId == u.Id ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.Circle)">
+                    @u.Nome
+                </MudMenuItem>
+            }
+        </MudMenu>
+    </MudAppBar>
+
+    <MudDrawer @bind-Open="_drawerAberto" Elevation="2" ClipMode="DrawerClipMode.Always">
+        <NavMenu />
+    </MudDrawer>
+
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.False" Class="pa-4">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    bool _drawerAberto = true;
+    string _termoBusca = string.Empty;
+    int _notificacoesNaoLidas = 0;
+    List<Usuario> _usuarios = [];
+
+    private readonly MudTheme _tema = new()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#1565C0",
+            Secondary = "#0288D1",
+            AppbarBackground = "#1565C0",
+            Background = "#F5F5F5",
+            Surface = "#FFFFFF",
+        }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _usuarios = await Db.Usuarios.Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+
+        // Garante que há usuário selecionado
+        if (Sessao.UsuarioId is null && _usuarios.Any())
+            Sessao.UsuarioId = _usuarios.First().Id;
+
+        Sessao.OnChange += AtualizarEstado;
+        Publicador.NotificacoesAlteradas += AoAlterarNotificacoes;
+        await CarregarNotificacoes();
+    }
+
+    // DbContext próprio: esta contagem pode ser disparada por outro circuito a qualquer momento.
+    private async Task CarregarNotificacoes()
+    {
+        if (Sessao.UsuarioId is null) return;
+        using var escopo = ScopeFactory.CreateScope();
+        var db = escopo.ServiceProvider.GetRequiredService<KanbanDbContext>();
+        _notificacoesNaoLidas = await db.Notificacoes
+            .CountAsync(n => n.DestinatarioId == Sessao.UsuarioId && !n.Lida && !n.Excluido);
+    }
+
+    private void AoAlterarNotificacoes(IReadOnlyCollection<int> destinatarios)
+    {
+        if (Sessao.UsuarioId is int usuarioId && destinatarios.Contains(usuarioId))
+            AtualizarEstado();
+    }
+
+    private void SelecionarUsuario(int id)
+    {
+        Sessao.UsuarioId = id;
+        Sessao.NotificarMudanca();
+    }
+
+    private void AtualizarEstado()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            await CarregarNotificacoes();
+            StateHasChanged();
+        });
+    }
+
+    private void ToggleDrawer() => _drawerAberto = !_drawerAberto;
+
+    private void BuscarGlobal()
+    {
+        if (!string.IsNullOrWhiteSpace(_termoBusca))
+            Nav.NavigateTo($"/busca?q={Uri.EscapeDataString(_termoBusca)}");
+    }
+
+    public void Dispose()
+    {
+        Sessao.OnChange -= AtualizarEstado;
+        Publicador.NotificacoesAlteradas -= AoAlterarNotificacoes;
+    }
+}

@@ -1,0 +1,70 @@
+@inherits LayoutComponentBase
+@inject SessaoUsuario Sessao
+@inject KanbanDbContext Db
+@implements IDisposable
+
+<MudThemeProvider Theme="_tema" />
+<MudPopoverProvider />
+<MudDialogProvider FullWidth="true" MaxWidth="MaxWidth.Small" />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="1" Color="Color.Primary">
+        <MudIcon Icon="@Icons.Material.Filled.Inbox" Class="mr-2" />
+        <MudText Typo="Typo.h6">Portal de Solicitações</MudText>
+        <MudSpacer />
+        <MudButton Href="/" Color="Color.Inherit" StartIcon="@Icons.Material.Filled.ListAlt">Minhas solicitações</MudButton>
+        <MudButton Href="/nova" Color="Color.Inherit" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" Class="ml-2">Nova solicitação</MudButton>
+
+        @* Seletor de usuário provisório (sem login real, como no sistema principal) *@
+        <MudMenu Icon="@Icons.Material.Filled.AccountCircle" Color="Color.Inherit" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="ml-2">
+            <MudMenuItem Disabled="true">
+                <MudText Typo="Typo.caption">@(_usuarios.FirstOrDefault(u => u.Id == Sessao.UsuarioId)?.Nome ?? "Escolha o usuário")</MudText>
+            </MudMenuItem>
+            <MudDivider />
+            @foreach (var usuario in _usuarios)
+            {
+                <MudMenuItem OnClick="@(() => Selecionar(usuario.Id))"
+                             Icon="@(Sessao.UsuarioId == usuario.Id ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.Circle)">
+                    @usuario.Nome
+                </MudMenuItem>
+            }
+        </MudMenu>
+    </MudAppBar>
+
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.False" Class="pa-4 portal-conteudo">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private List<Usuario> _usuarios = [];
+
+    private readonly MudTheme _tema = new()
+    {
+        PaletteLight = new PaletteLight { Primary = "#1565C0", Secondary = "#0288D1", AppbarBackground = "#1565C0", Background = "#F5F5F5", Surface = "#FFFFFF" }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _usuarios = await Db.Usuarios.AsNoTracking().Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        Sessao.OnChange += Atualizar;
+        if (Sessao.UsuarioId is null && _usuarios.Count > 0)
+        {
+            Sessao.UsuarioId = _usuarios[0].Id;
+            Sessao.NotificarMudanca(); // páginas que iniciaram antes do layout recarregam com o usuário
+        }
+    }
+
+    private void Selecionar(int id)
+    {
+        Sessao.UsuarioId = id;
+        Sessao.NotificarMudanca();
+    }
+
+    private void Atualizar() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Sessao.OnChange -= Atualizar;
+}

@@ -1,0 +1,206 @@
+@page "/admin/feriados"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject FeriadosService Servico
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject IDialogService Dialog
+@inject ISnackbar Snackbar
+@inject IConfiguration Configuracao
+
+<PageTitle>Feriados</PageTitle>
+
+<div class="d-flex align-center justify-space-between flex-wrap gap-3 mb-2">
+    <div>
+        <MudText Typo="Typo.h5">Feriados e dias não úteis</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Datas descontadas dos dias úteis em prazos relativos, remarcação de conflitos, prazo em risco e horário comercial das automações.
+            @if (!Configuracao.GetValue("Calendario:ConsiderarFeriados", true))
+            {
+                <b>Atenção: o uso de feriados está desligado na Parametrização.</b>
+            }
+        </MudText>
+    </div>
+    <MudSelect T="int" Value="_ano" ValueChanged="SelecionarAno" Label="Ano" Style="max-width:140px">
+        @* foreach (não for): o item de seleção guarda o valor por closure; com for todos ficavam com o último ano *@
+        @foreach (var ano in Enumerable.Range(DateTime.Today.Year - 1, 5))
+        {
+            <MudSelectItem Value="@ano">@ano</MudSelectItem>
+        }
+    </MudSelect>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-4">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CloudDownload" Disabled="_processando" OnClick="@(() => Importar(true))">
+        Importar nacionais de @_ano (BrasilAPI)
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Calculate" Disabled="_processando" OnClick="@(() => Importar(false))">
+        Gerar nacionais de @_ano (cálculo local)
+    </MudButton>
+</div>
+
+<MudGrid>
+    <MudItem xs="12" md="8">
+        <MudTable Items="_feriados" Dense="true" Hover="true" Striped="true" RowsPerPage="@ItensPorPagina">
+            <HeaderContent>
+                <MudTh>Data</MudTh><MudTh>Dia</MudTh><MudTh>Nome</MudTh><MudTh>Tipo</MudTh><MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@DataNoAno(context).ToString("dd/MM/yyyy")</MudTd>
+                <MudTd>@DataNoAno(context).ToString("dddd", new System.Globalization.CultureInfo("pt-BR"))</MudTd>
+                <MudTd>
+                    @context.Nome
+                    @if (context.RecorrenteAnual)
+                    {
+                        <MudTooltip Text="Repete todo ano"><MudIcon Icon="@Icons.Material.Filled.Autorenew" Size="Size.Small" Class="ml-1" /></MudTooltip>
+                    }
+                </MudTd>
+                <MudTd><MudChip T="string" Size="Size.Small" Color="@CorTipo(context.Tipo)">@NomeTipo(context.Tipo)</MudChip></MudTd>
+                <MudTd>
+                    <MudTooltip Text="Editar"><MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => Editar(context))" /></MudTooltip>
+                    <MudTooltip Text="Excluir"><MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="@(() => Excluir(context))" /></MudTooltip>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent><MudText Class="mud-text-secondary">Nenhum feriado em @_ano. Use a importação acima ou cadastre ao lado.</MudText></NoRecordsContent>
+            <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+        </MudTable>
+    </MudItem>
+    <MudItem xs="12" md="4">
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.h6">@(_editando is null ? "Novo feriado" : "Editar feriado")</MudText>
+            <MudDatePicker @bind-Date="_data" Label="Data" Class="mt-2" />
+            <MudTextField @bind-Value="_nome" Label="Nome" MaxLength="200" Class="mt-2" />
+            <MudSelect T="TipoFeriado" @bind-Value="_tipo" Label="Tipo" Class="mt-2" ToStringFunc="@(t => NomeTipo(t))">
+                @foreach (var tipo in Enum.GetValues<TipoFeriado>())
+                {
+                    <MudSelectItem Value="@tipo">@NomeTipo(tipo)</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSwitch T="bool" @bind-Value="_recorrente" Color="Color.Primary" Label="Repete todo ano (mesmo dia e mês)" Class="mt-2" />
+            <div class="d-flex justify-end gap-2 mt-3">
+                @if (_editando is not null)
+                {
+                    <MudButton OnClick="Limpar">Cancelar</MudButton>
+                }
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!_data.HasValue || string.IsNullOrWhiteSpace(_nome))" OnClick="Salvar">Salvar</MudButton>
+            </div>
+        </MudPaper>
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+            A BrasilAPI traz apenas feriados nacionais. Cadastre aqui os estaduais, municipais e recessos da empresa.
+            Pontos facultativos (Carnaval, Corpus Christi) também contam como dia não útil — exclua-os se sua empresa trabalha nessas datas.
+        </MudAlert>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private int _ano = DateTime.Today.Year;
+    private List<Feriado> _feriados = [];
+    private Feriado? _editando;
+    private DateTime? _data;
+    private string _nome = string.Empty;
+    private TipoFeriado _tipo = TipoFeriado.Municipal;
+    private bool _recorrente;
+    private bool _processando;
+
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    protected override async Task OnInitializedAsync() => await Carregar();
+
+    private async Task SelecionarAno(int ano)
+    {
+        _ano = ano;
+        await Carregar();
+    }
+
+    private async Task Carregar()
+    {
+        var inicio = new DateTime(_ano, 1, 1);
+        var fim = new DateTime(_ano, 12, 31);
+        _feriados = (await Db.Feriados.AsNoTracking().Where(f => f.RecorrenteAnual || f.Data >= inicio && f.Data <= fim).ToListAsync())
+            .OrderBy(DataNoAno).ToList();
+    }
+
+    private DateTime DataNoAno(Feriado feriado)
+        => feriado.RecorrenteAnual && DateTime.DaysInMonth(_ano, feriado.Data.Month) >= feriado.Data.Day
+            ? new DateTime(_ano, feriado.Data.Month, feriado.Data.Day)
+            : feriado.Data;
+
+    private async Task Importar(bool usarApi)
+    {
+        _processando = true;
+        try
+        {
+            var (inseridos, fonte) = await Servico.ImportarNacionaisAsync(_ano, usarApi);
+            Snackbar.Add(inseridos == 0 ? $"Nada novo para {_ano} ({fonte})." : $"{inseridos} feriado(s) adicionado(s) — fonte: {fonte}.", Severity.Success);
+            await Carregar();
+        }
+        finally
+        {
+            _processando = false;
+        }
+    }
+
+    private void Editar(Feriado feriado)
+    {
+        _editando = feriado;
+        _data = feriado.Data; _nome = feriado.Nome; _tipo = feriado.Tipo; _recorrente = feriado.RecorrenteAnual;
+    }
+
+    private void Limpar()
+    {
+        _editando = null;
+        _data = null; _nome = string.Empty; _tipo = TipoFeriado.Municipal; _recorrente = false;
+    }
+
+    private async Task Salvar()
+    {
+        if (!_data.HasValue || string.IsNullOrWhiteSpace(_nome)) return;
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        Feriado feriado;
+        if (_editando is null)
+        {
+            feriado = new Feriado { CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow };
+            Db.Feriados.Add(feriado);
+        }
+        else
+        {
+            feriado = await Db.Feriados.FirstAsync(f => f.Id == _editando.Id);
+        }
+        feriado.Data = _data.Value.Date;
+        feriado.Nome = _nome.Trim();
+        feriado.Tipo = _tipo;
+        feriado.RecorrenteAnual = _recorrente;
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Feriado salvo.", Severity.Success);
+        Limpar();
+        await Carregar();
+    }
+
+    private async Task Excluir(Feriado feriado)
+    {
+        var confirmado = await Dialog.ShowMessageBox("Excluir feriado", $"Excluir \"{feriado.Nome}\"?", yesText: "Excluir", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        var entidade = await Db.Feriados.FirstOrDefaultAsync(f => f.Id == feriado.Id);
+        if (entidade is null) return;
+        entidade.Excluido = true;
+        entidade.ExcluidoEm = DateTime.UtcNow;
+        entidade.ExcluidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        await Carregar();
+    }
+
+    private static string NomeTipo(TipoFeriado tipo) => tipo switch
+    {
+        TipoFeriado.PontoFacultativo => "Ponto facultativo",
+        TipoFeriado.Empresa => "Empresa / recesso",
+        _ => tipo.ToString()
+    };
+
+    private static Color CorTipo(TipoFeriado tipo) => tipo switch
+    {
+        TipoFeriado.Nacional => Color.Primary,
+        TipoFeriado.Estadual => Color.Secondary,
+        TipoFeriado.Municipal => Color.Tertiary,
+        TipoFeriado.PontoFacultativo => Color.Default,
+        _ => Color.Info
+    };
+}

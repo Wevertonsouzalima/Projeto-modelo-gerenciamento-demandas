@@ -1,0 +1,150 @@
+@page "/sprints/{SprintId:int}"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject NavigationManager Nav
+@inject IConfiguration Configuracao
+
+<PageTitle>Painel da Sprint</PageTitle>
+
+@if (_sprint is null)
+{
+    <MudAlert Severity="Severity.Error">Sprint não encontrada.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-4">
+        <div>
+            <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="Voltar">Sprints</MudButton>
+            <MudText Typo="Typo.h5" Class="mt-2">@_sprint.Nome</MudText>
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">@_sprint.Quadro.Nome · @_sprint.Meta</MudText>
+        </div>
+        <MudChip T="string" Color="@(_sprint.Ativa ? Color.Success : Color.Default)">@(_sprint.Ativa ? "Ativa" : "Planejada/encerrada")</MudChip>
+    </div>
+
+    <MudGrid Class="mb-4">
+        <MudItem xs="12" sm="4"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Cartões</MudText><MudText Typo="Typo.h5">@_cartoes.Count</MudText></MudPaper></MudItem>
+        <MudItem xs="12" sm="4"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Concluídos</MudText><MudText Typo="Typo.h5">@_concluidos</MudText></MudPaper></MudItem>
+        <MudItem xs="12" sm="4"><MudPaper Class="pa-4"><MudText Typo="Typo.caption">Restantes</MudText><MudText Typo="Typo.h5">@(_cartoes.Count - _concluidos)</MudText></MudPaper></MudItem>
+    </MudGrid>
+
+    <MudText Typo="Typo.h6" Class="mb-1">Burndown (@(_usaPontos ? "pontos de estimativa" : "quantidade de cartões"))</MudText>
+    @if (_usaPontos && _semEstimativa > 0)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">@_semEstimativa cartão(ões) sem estimativa não entram na soma de pontos.</MudAlert>
+    }
+    else if (!_usaPontos)
+    {
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">Nenhum cartão da sprint tem estimativa; o burndown usa 1 ponto por cartão.</MudText>
+    }
+    <MudPaper Class="pa-4 mb-3" Outlined="true">
+        <MudChart ChartType="ChartType.Line" ChartSeries="_series" XAxisLabels="_rotulos" Width="100%" Height="300px"
+                  ChartOptions="@(new ChartOptions { ChartPalette = ["#2a78d6", "#eb6834"], ShowToolTips = true, LineStrokeWidth = 2 })" />
+    </MudPaper>
+    <MudTable Items="_burndown" RowsPerPage="@ItensPorPagina" Dense="true" Striped="true" Hover="true">
+        <HeaderContent><MudTh>Data</MudTh><MudTh>Restante</MudTh><MudTh>Ideal</MudTh><MudTh>Concluído</MudTh></HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.Data.ToString("dd/MM/yyyy")</MudTd>
+            <MudTd>@(context.Restante?.ToString("0.##") ?? "—")</MudTd>
+            <MudTd>@context.Ideal.ToString("0.##")</MudTd>
+            <MudTd>@(context.Concluido?.ToString("0.##") ?? "—")</MudTd>
+        </RowTemplate>
+        <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+    </MudTable>
+
+    <MudText Typo="Typo.h6" Class="mt-5 mb-2">Cartões da Sprint</MudText>
+    <MudTable Items="_cartoes" RowsPerPage="@ItensPorPagina" Dense="true" Striped="true" Hover="true">
+        <HeaderContent><MudTh>Título</MudTh><MudTh>Lista</MudTh><MudTh>Prazo</MudTh><MudTh>Status</MudTh></HeaderContent>
+        <RowTemplate>
+            <MudTd><MudButton Variant="Variant.Text" OnClick="@(() => Nav.NavigateTo($"/quadros/{context.Lista.QuadroId}"))">@context.Titulo</MudButton></MudTd>
+            <MudTd>@context.Lista.Nome</MudTd>
+            <MudTd>@context.Prazo?.ToLocalTime().ToString("dd/MM/yyyy")</MudTd>
+            <MudTd>@(EhConcluido(context) ? "Concluído" : "Em aberto")</MudTd>
+        </RowTemplate>
+        <PagerContent><MudTablePager RowsPerPageString="Por página:" /></PagerContent>
+    </MudTable>
+}
+
+@code {
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+
+    [Parameter] public int SprintId { get; set; }
+    private Sprint? _sprint;
+    private List<Cartao> _cartoes = [];
+    private List<LinhaBurndown> _burndown = [];
+    private int _concluidos;
+    private bool _usaPontos;
+    private int _semEstimativa;
+    private List<ChartSeries> _series = [];
+    private string[] _rotulos = [];
+
+    private Dictionary<int, DateTime> _dataConclusaoPorCartao = [];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _sprint = await Db.Sprints.Include(s => s.Quadro).FirstOrDefaultAsync(s => s.Id == SprintId);
+        if (_sprint is null) return;
+        _cartoes = await Db.SprintCartoes.Where(sc => sc.SprintId == SprintId).Select(sc => sc.Cartao).Include(c => c.Lista).ToListAsync();
+        _concluidos = _cartoes.Count(EhConcluido);
+        await CarregarDatasConclusaoAsync();
+        CalcularBurndown();
+    }
+
+    private bool EhConcluido(Cartao cartao) => cartao.Lista.Nome.Equals("Concluído", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Data de conclusão de cada cartão derivada do HistoricoAtividade: a primeira vez que o cartão
+    /// entrou em uma lista chamada "Concluído" (não a última alteração do registro).
+    /// </summary>
+    private async Task CarregarDatasConclusaoAsync()
+    {
+        var cartaoIds = _cartoes.Select(c => c.Id).ToList();
+        var eventos = await Db.HistoricoAtividades
+            .Where(h => cartaoIds.Contains(h.CartaoId) && h.ListaDestinoId != null
+                && (h.Tipo == TipoHistoricoAtividade.CartaoMovido || h.Tipo == TipoHistoricoAtividade.CartaoCriado))
+            .Include(h => h.ListaDestino)
+            .Where(h => h.ListaDestino!.Nome == "Concluído")
+            .OrderBy(h => h.OcorridoEm)
+            .ToListAsync();
+        _dataConclusaoPorCartao = eventos
+            .GroupBy(h => h.CartaoId)
+            .ToDictionary(g => g.Key, g => g.First().OcorridoEm.ToLocalTime());
+    }
+
+    /// <summary>
+    /// Burndown por pontos de estimativa (quando algum cartão tem estimativa) ou por quantidade de cartões.
+    /// Dias futuros não têm valor real; a linha ideal cai linearmente do total até zero no último dia.
+    /// </summary>
+    private void CalcularBurndown()
+    {
+        _burndown = [];
+        _usaPontos = _cartoes.Any(c => c.Estimativa.HasValue);
+        _semEstimativa = _cartoes.Count(c => !c.Estimativa.HasValue);
+        decimal Peso(Cartao c) => _usaPontos ? c.Estimativa ?? 0 : 1;
+        var total = _cartoes.Sum(Peso);
+
+        var totalDias = Math.Max(1, (_sprint!.DataFim.Date - _sprint.DataInicio.Date).Days + 1);
+        for (var dia = 0; dia < totalDias; dia++)
+        {
+            var data = _sprint.DataInicio.Date.AddDays(dia);
+            var ideal = totalDias == 1 ? 0 : total - total * dia / (totalDias - 1);
+            if (data > DateTime.Today)
+            {
+                _burndown.Add(new LinhaBurndown(data, null, ideal, null));
+                continue;
+            }
+            var concluido = _cartoes.Where(c => _dataConclusaoPorCartao.TryGetValue(c.Id, out var dataConclusao) && dataConclusao.Date <= data).Sum(Peso);
+            _burndown.Add(new LinhaBurndown(data, Math.Max(0, total - concluido), ideal, concluido));
+        }
+
+        _rotulos = _burndown.Select(l => l.Data.ToString("dd/MM")).ToArray();
+        var ultimoReal = _burndown.LastOrDefault(l => l.Restante.HasValue)?.Restante ?? total;
+        _series =
+        [
+            new ChartSeries { Name = "Restante", Data = _burndown.Select(l => (double)(l.Restante ?? ultimoReal)).ToArray() },
+            new ChartSeries { Name = "Ideal", Data = _burndown.Select(l => (double)l.Ideal).ToArray() }
+        ];
+    }
+
+    private void Voltar() => Nav.NavigateTo("/sprints");
+    private sealed record LinhaBurndown(DateTime Data, decimal? Restante, decimal Ideal, decimal? Concluido);
+}

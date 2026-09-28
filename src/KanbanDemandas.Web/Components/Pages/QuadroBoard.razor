@@ -1,0 +1,941 @@
+@page "/quadros/{QuadroId:int}"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject IDialogService Dialog
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject MovimentacaoCartaoService Movimentacao
+@inject AssistenteMovimentacao Assistente
+@inject IJSRuntime JS
+@inject IServiceScopeFactory ScopeFactory
+@inject IConfiguration Configuracao
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.Components.Rendering
+
+<PageTitle>@(_quadro?.Nome ?? "Quadro")</PageTitle>
+
+@if (_carregando)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_quadro is null)
+{
+    <MudAlert Severity="Severity.Error">Quadro não encontrado.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center justify-space-between flex-wrap gap-2 mb-4">
+        <div>
+            <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="Voltar">Quadros</MudButton>
+            <MudText Typo="Typo.h5" Class="mt-2">@_quadro.Nome</MudText>
+            @if (!string.IsNullOrWhiteSpace(_quadro.Descricao))
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">@_quadro.Descricao</MudText>
+            }
+        </div>
+        <div class="d-flex gap-2">
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Route" OnClick="ConfigurarCaminho">Caminho</MudButton>
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Label" OnClick="GerenciarEtiquetas">Etiquetas</MudButton>
+            <MudButton Variant="Variant.Outlined" StartIcon="@(_visaoTabela ? Icons.Material.Filled.ViewKanban : Icons.Material.Filled.TableView)" OnClick="AlternarVisao">
+                @(_visaoTabela ? "Board" : "Tabela")
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AdicionarLista">Nova lista</MudButton>
+        </div>
+    </div>
+    <MudTextField @bind-Value="_busca" Placeholder="Buscar cartões..." Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Class="mb-3" />
+    <div class="d-flex flex-wrap align-center gap-3 mb-2">
+        <MudSelect T="int?" @bind-Value="_listaFiltro" ToStringFunc="@(id => NomeLista(id))" Label="Lista" Clearable="true" Dense="true" Style="min-width: 180px">
+            @foreach (var lista in _listas)
+            {
+                <MudSelectItem Value="@((int?)lista.Id)">@lista.Nome</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="int?" @bind-Value="_sistemaFiltro" ToStringFunc="@(id => _sistemas.FirstOrDefault(x => x.Id == id)?.Nome)" Label="Sistema" Clearable="true" Dense="true" Style="min-width: 180px">
+            @foreach (var sistema in _sistemas)
+            {
+                <MudSelectItem Value="@((int?)sistema.Id)">@sistema.Nome</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="Prioridade?" @bind-Value="_prioridadeFiltro" Label="Prioridade" Clearable="true" Dense="true" Style="min-width: 160px">
+            @foreach (var prioridade in Enum.GetValues<Prioridade>())
+            {
+                <MudSelectItem Value="@((Prioridade?)prioridade)">@prioridade</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="int?" @bind-Value="_desenvolvedorFiltro" ToStringFunc="@(id => _usuarios.FirstOrDefault(x => x.Id == id)?.Nome)" Label="Desenvolvedor" Clearable="true" Dense="true" Style="min-width: 180px">
+            @foreach (var usuario in _usuarios)
+            {
+                <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="int?" @bind-Value="_solicitanteFiltro" ToStringFunc="@(id => _usuarios.FirstOrDefault(x => x.Id == id)?.Nome)" Label="Solicitante" Clearable="true" Dense="true" Style="min-width: 180px">
+            @foreach (var usuario in _usuarios)
+            {
+                <MudSelectItem Value="@((int?)usuario.Id)">@usuario.Nome</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="int?" @bind-Value="_etiquetaFiltro" ToStringFunc="@(id => _etiquetas.FirstOrDefault(x => x.Id == id)?.Nome)" Label="Etiqueta" Clearable="true" Dense="true" Style="min-width: 160px">
+            @foreach (var etiqueta in _etiquetas)
+            {
+                <MudSelectItem Value="@((int?)etiqueta.Id)">@etiqueta.Nome</MudSelectItem>
+            }
+        </MudSelect>
+        <MudButton Variant="@(_somenteMeus ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" Size="Size.Small" StartIcon="@Icons.Material.Filled.Person" OnClick="AlternarSomenteMeus">
+            Somente meus cartões
+        </MudButton>
+    </div>
+    <div class="d-flex flex-wrap align-center gap-3 mb-4">
+        <MudSelect T="CampoDataFiltro" @bind-Value="_campoDataFiltro" Label="Filtrar data por" Dense="true" Style="min-width: 160px">
+            <MudSelectItem Value="CampoDataFiltro.Prazo">Prazo</MudSelectItem>
+            <MudSelectItem Value="CampoDataFiltro.Inicio">Início</MudSelectItem>
+            <MudSelectItem Value="CampoDataFiltro.Criacao">Criação</MudSelectItem>
+        </MudSelect>
+        <MudDatePicker @bind-Date="_dataDe" Label="De" Clearable="true" Style="min-width: 160px" />
+        <MudDatePicker @bind-Date="_dataAte" Label="Até" Clearable="true" Style="min-width: 160px" />
+        @if (_listaFiltro.HasValue || _sistemaFiltro.HasValue || _prioridadeFiltro.HasValue || _desenvolvedorFiltro.HasValue || _solicitanteFiltro.HasValue || _etiquetaFiltro.HasValue || _somenteMeus || _dataDe.HasValue || _dataAte.HasValue || !string.IsNullOrWhiteSpace(_busca))
+        {
+            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="LimparFiltros">Limpar filtros</MudButton>
+        }
+    </div>
+
+    @if (_listas.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">Este quadro ainda não possui listas.</MudAlert>
+    }
+    else
+    {
+        @if (_visaoTabela)
+        {
+            <div class="d-flex justify-end gap-2 mb-2">
+                <MudButton Href='@UrlExportacao("xlsx")' Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.FileDownload">Excel</MudButton>
+                <MudButton Href='@UrlExportacao("pdf")' Variant="Variant.Outlined" Size="Size.Small" StartIcon="@Icons.Material.Filled.PictureAsPdf">PDF</MudButton>
+            </div>
+            <MudTable Items="CartoesFiltrados" Hover="true" Striped="true" Dense="true" HorizontalScrollbar="true" AllowUnsorted="true" RowsPerPage="@ItensPorPagina">
+                <HeaderContent>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.Titulo)">Título</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => NomeListaCompleto(c.ListaId))">Lista</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.Sistema != null ? c.Sistema.Nome : null)">Sistema</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => NomeUsuario(c.SolicitanteId))">Solicitante</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => NomesDesenvolvedores(c))">Desenvolvedores</MudTableSortLabel></MudTh>
+                    <MudTh>Etiquetas</MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.Prioridade)">Prioridade</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.DataInicio)">Início</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.Prazo)">Prazo</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.Estimativa)">Estimativa</MudTableSortLabel></MudTh>
+                    <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => c.CriadoEm)">Criado em</MudTableSortLabel></MudTh>
+                    @foreach (var nomeCampo in NomesCamposPersonalizados)
+                    {
+                        <MudTh><MudTableSortLabel T="Cartao" SortBy="@(c => ChaveOrdenacaoCampo(c, nomeCampo))">@nomeCampo</MudTableSortLabel></MudTh>
+                    }
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd><MudButton Variant="Variant.Text" OnClick="@(() => AbrirDetalhes(context))">@context.Titulo</MudButton></MudTd>
+                    <MudTd>@NomeListaCompleto(context.ListaId)</MudTd>
+                    <MudTd>@context.Sistema?.Nome</MudTd>
+                    <MudTd>@NomeUsuario(context.SolicitanteId)</MudTd>
+                    <MudTd>@NomesDesenvolvedores(context)</MudTd>
+                    <MudTd>
+                        <div class="d-flex flex-wrap gap-1">
+                            @foreach (var etiqueta in context.Etiquetas.Select(e => e.Etiqueta))
+                            {
+                                <span class="kanban-etiqueta" style="@($"background:{etiqueta.Cor}")">@etiqueta.Nome</span>
+                            }
+                        </div>
+                    </MudTd>
+                    <MudTd>@context.Prioridade</MudTd>
+                    <MudTd>@(context.DataInicio?.ToLocalTime().ToString("dd/MM/yyyy"))</MudTd>
+                    <MudTd>@(context.Prazo?.ToLocalTime().ToString("dd/MM/yyyy"))</MudTd>
+                    <MudTd>@(context.Estimativa?.ToString("0.##"))</MudTd>
+                    <MudTd>@context.CriadoEm.ToLocalTime().ToString("dd/MM/yyyy")</MudTd>
+                    @foreach (var nomeCampo in NomesCamposPersonalizados)
+                    {
+                        <MudTd>@ValorCampoFormatado(context, nomeCampo)</MudTd>
+                    }
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="mud-text-secondary">Nenhum cartão encontrado com os filtros atuais.</MudText>
+                </NoRecordsContent>
+                <PagerContent>
+                    <MudTablePager RowsPerPageString="Por página:" PageSizeOptions="@(new[] { ItensPorPagina, ItensPorPagina * 2, ItensPorPagina * 4 })" />
+                </PagerContent>
+            </MudTable>
+        }
+        else
+        {
+        <div class="kanban-board">
+            @foreach (var lista in ListasRaiz)
+            {
+                RenderizarColuna(__builder, lista, false);
+            }
+        </div>
+        }
+    }
+}
+
+@code {
+    [Parameter] public int QuadroId { get; set; }
+    [SupplyParameterFromQuery(Name = "cartao")] public int? CartaoAbrirId { get; set; }
+    private Quadro? _quadro;
+    private List<Lista> _listas = [];
+    private Dictionary<int, string> _nomesListas = [];
+    private DotNetObjectReference<QuadroBoard>? _dotNetRef;
+    private Dictionary<int, int> _sugestoesPorCartao = [];
+    private readonly Dictionary<int, int> _limitePorLista = [];
+
+    private bool MostrarDescricao => Configuracao.GetValue("Cartao:MostrarDescricao", true);
+    private int LinhasDescricao => Math.Clamp(Configuracao.GetValue("Cartao:LinhasDescricao", 2), 1, 10);
+    private int CartoesPorColuna => Math.Max(5, Configuracao.GetValue("Quadro:CartoesPorColuna", 30));
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+    private bool _recarregando;
+    private bool _recarregarNovamente;
+    private bool _carregando = true;
+    private string? _busca;
+    private bool _visaoTabela;
+    private int? _listaFiltro;
+    private int? _sistemaFiltro;
+    private Prioridade? _prioridadeFiltro;
+    private int? _desenvolvedorFiltro;
+    private int? _solicitanteFiltro;
+    private int? _etiquetaFiltro;
+    private bool _somenteMeus;
+    private CampoDataFiltro _campoDataFiltro = CampoDataFiltro.Prazo;
+    private DateTime? _dataDe;
+    private DateTime? _dataAte;
+    private List<Sistema> _sistemas = [];
+    private List<Usuario> _usuarios = [];
+    private List<Etiqueta> _etiquetas = [];
+    private Microsoft.AspNetCore.SignalR.Client.HubConnection? _hub;
+
+    private enum CampoDataFiltro { Prazo, Inicio, Criacao }
+
+    private IEnumerable<Lista> ListasRaiz
+        => _listas.Where(l => !l.ListaPaiId.HasValue || !_nomesListas.ContainsKey(l.ListaPaiId.Value)).OrderBy(l => l.Ordem);
+
+    private string? NomeLista(int? id) => id.HasValue ? _nomesListas.GetValueOrDefault(id.Value) : null;
+
+    private void RenderizarColuna(RenderTreeBuilder __builder, Lista lista, bool ehSublista)
+    {
+        var sublistas = _listas.Where(l => l.ListaPaiId == lista.Id).OrderBy(l => l.Ordem).ToList();
+        var wipExcedido = lista.LimiteWip.HasValue && lista.Cartoes.Count > lista.LimiteWip.Value;
+        var classe = ehSublista ? "kanban-subcolumn" : "kanban-column";
+        if (sublistas.Count > 0) classe += " kanban-column-grupo";
+
+        <div class="@classe" data-lista-id="@lista.Id">
+            <div class="kanban-column-header">
+                <div class="kanban-column-handle" draggable="true" data-lista-arrastavel-id="@lista.Id" title="Arraste para reordenar">
+                    <div class="d-flex align-center gap-1">
+                        <MudText Typo="Typo.subtitle1" Class="font-weight-medium">@lista.Nome</MudText>
+                        @if (lista.EhBacklog)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Backlog</MudChip>
+                        }
+                    </div>
+                    <MudText Typo="Typo.caption" Color="@(wipExcedido ? Color.Error : Color.Default)">
+                        @lista.Cartoes.Count cartões@(lista.LimiteWip.HasValue ? $" / WIP {lista.LimiteWip}" : "")
+                    </MudText>
+                </div>
+                <div class="d-flex">
+                    <MudTooltip Text="Configurar etapa: campos e exigências">
+                        <MudIconButton Icon="@Icons.Material.Filled.Settings" Size="Size.Small" OnClick="@(() => ConfigurarCampos(lista))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Adicionar sublista">
+                        <MudIconButton Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" OnClick="@(() => AdicionarSublista(lista))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Mover lista para a esquerda">
+                        <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small" OnClick="@(() => ReordenarLista(lista, -1))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Mover lista para a direita">
+                        <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" OnClick="@(() => ReordenarLista(lista, 1))" />
+                    </MudTooltip>
+                    @if (sublistas.Count == 0)
+                    {
+                        <MudTooltip Text="Adicionar cartão">
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" OnClick="@(() => AdicionarCartao(lista))" />
+                        </MudTooltip>
+                    }
+                </div>
+            </div>
+
+            @if (sublistas.Count > 0 && lista.Cartoes.Count > 0)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">Listas com sublistas não guardam cartões. Arraste estes para uma sublista.</MudAlert>
+            }
+            @if (sublistas.Count == 0 || lista.Cartoes.Count > 0)
+            {
+                var cartoesDaLista = FiltrarCartoes(lista).OrderBy(c => c.Ordem).ToList();
+                var visiveis = _limitePorLista.GetValueOrDefault(lista.Id, CartoesPorColuna);
+                <div class="kanban-cards">
+                    @foreach (var cartao in cartoesDaLista.Take(visiveis))
+                    {
+                        RenderizarCartao(__builder, lista, cartao);
+                    }
+                    @if (cartoesDaLista.Count > visiveis)
+                    {
+                        <MudButton Variant="Variant.Text" FullWidth="true" StartIcon="@Icons.Material.Filled.ExpandMore"
+                                   OnClick="@(() => _limitePorLista[lista.Id] = visiveis + CartoesPorColuna)">
+                            Mostrar mais (@(cartoesDaLista.Count - visiveis) restantes)
+                        </MudButton>
+                    }
+                </div>
+            }
+            @if (sublistas.Count > 0)
+            {
+                <div class="kanban-sublistas">
+                    @foreach (var sublista in sublistas)
+                    {
+                        RenderizarColuna(__builder, sublista, true);
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    private void RenderizarCartao(RenderTreeBuilder __builder, Lista lista, Cartao cartao)
+    {
+        var desenvolvedores = cartao.Desenvolvedores.OrderByDescending(d => d.Principal)
+            .Select(d => _usuarios.FirstOrDefault(u => u.Id == d.UsuarioId)?.Nome).OfType<string>().ToList();
+        var campos = lista.DefinicoesCampo.Where(c => !c.Excluido).OrderBy(c => c.Ordem)
+            .Select(c => (Campo: c, Valor: CamposCartao.ValorMaisRecente(cartao.ValoresCampo, c.Id)))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Valor) || x.Campo.Obrigatorio)
+            .ToList();
+        var fixosPendentes = RegrasEtapa.Separar(RegrasEtapa.FixosFaltando(cartao, lista)).ToList();
+
+        <MudPaper Class="kanban-card mb-3" Elevation="1" draggable="true" data-cartao-id="@cartao.Id">
+            <div class="kanban-card-topo">
+                <div class="kanban-card-titulo kanban-card-link" @onclick="@(() => AbrirDetalhes(cartao))">
+                    <span class="kanban-card-codigo">@CodigoCartao.Formatar(cartao.Id, Configuracao["Cartao:PrefixoCodigo"])</span>
+                    @cartao.Titulo
+                </div>
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" Class="kanban-card-menu"
+                         AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" AriaLabel="Ações do cartão">
+                    <MudMenuItem Icon="@Icons.Material.Filled.OpenInFull" OnClick="@(() => AbrirDetalhes(cartao))">Abrir detalhes</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.Edit" OnClick="@(() => EditarCartao(cartao))">Editar</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.KeyboardArrowUp" OnClick="@(() => ReordenarCartao(lista, cartao, -1))">Mover para cima</MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.KeyboardArrowDown" OnClick="@(() => ReordenarCartao(lista, cartao, 1))">Mover para baixo</MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem Icon="@Icons.Material.Filled.Delete" IconColor="Color.Error" OnClick="@(() => ExcluirCartao(cartao))">Excluir</MudMenuItem>
+                </MudMenu>
+            </div>
+
+            @if (MostrarDescricao && !string.IsNullOrWhiteSpace(cartao.Descricao))
+            {
+                <div class="kanban-card-descricao" style="@($"-webkit-line-clamp:{LinhasDescricao};line-clamp:{LinhasDescricao}")" title="@cartao.Descricao">@cartao.Descricao</div>
+            }
+
+            @if (cartao.Alertas.Count > 0 || _sugestoesPorCartao.ContainsKey(cartao.Id))
+            {
+                <div class="d-flex flex-wrap gap-1 mt-2">
+                    @foreach (var alerta in cartao.Alertas.OrderByDescending(a => a.Severidade))
+                    {
+                        <MudTooltip Text="@($"{alerta.Mensagem} (automação) — clique para resolver")">
+                            <MudChip T="string" Size="Size.Small" Color="@CorAlerta(alerta.Severidade)" Icon="@IconeAlerta(alerta.Severidade)"
+                                     OnClick="@(() => ResolverAlerta(alerta))" Class="kanban-alerta">@alerta.Mensagem</MudChip>
+                        </MudTooltip>
+                    }
+                    @if (_sugestoesPorCartao.TryGetValue(cartao.Id, out var sugestoes))
+                    {
+                        <MudTooltip Text="Há sugestão de automação para este cartão — abra os detalhes para aprovar ou rejeitar">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Icon="@Icons.Material.Filled.Lightbulb" OnClick="@(() => AbrirDetalhes(cartao))">
+                                @(sugestoes == 1 ? "1 sugestão" : $"{sugestoes} sugestões")
+                            </MudChip>
+                        </MudTooltip>
+                    }
+                </div>
+            }
+
+            @if (cartao.Etiquetas.Count > 0)
+            {
+                <div class="kanban-card-secao d-flex flex-wrap gap-1">
+                    @foreach (var etiqueta in cartao.Etiquetas.Select(ce => ce.Etiqueta))
+                    {
+                        <span class="kanban-etiqueta" style="@($"background:{etiqueta.Cor}")">@etiqueta.Nome</span>
+                    }
+                </div>
+            }
+
+            @if (cartao.Sistema is not null || desenvolvedores.Count > 0)
+            {
+                <div class="kanban-card-secao">
+                    @if (cartao.Sistema is not null)
+                    {
+                        <div class="kanban-card-linha" title="Sistema">
+                            <MudIcon Icon="@Icons.Material.Filled.Computer" Size="Size.Small" />
+                            <span>@cartao.Sistema.Nome</span>
+                        </div>
+                    }
+                    @if (desenvolvedores.Count > 0)
+                    {
+                        <div class="kanban-card-linha" title="Desenvolvedores">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                            <span>@string.Join(", ", desenvolvedores)</span>
+                        </div>
+                    }
+                </div>
+            }
+
+            @if (campos.Count > 0 || fixosPendentes.Count > 0)
+            {
+                <div class="kanban-card-secao">
+                    @foreach (var fixo in fixosPendentes)
+                    {
+                        <div class="kanban-card-linha">
+                            <span class="kanban-card-campo-nome">@RegrasEtapa.Nome(fixo):</span>
+                            <span class="kanban-card-campo-pendente">pendente</span>
+                        </div>
+                    }
+                    @foreach (var (campo, valor) in campos)
+                    {
+                        <div class="kanban-card-linha">
+                            <span class="kanban-card-campo-nome">@campo.Nome:</span>
+                            @if (string.IsNullOrWhiteSpace(valor))
+                            {
+                                <span class="kanban-card-campo-pendente">pendente</span>
+                            }
+                            else
+                            {
+                                <span>@CamposCartao.Formatar(campo.Tipo, valor)</span>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <div class="kanban-card-rodape">
+                @if (cartao.OrigemPortal)
+                {
+                    <MudTooltip Text="@($"Aberto pelo portal{(string.IsNullOrWhiteSpace(cartao.TipoSolicitacao) ? "" : $" · {cartao.TipoSolicitacao}")}")">
+                        <MudIcon Icon="@Icons.Material.Filled.Inbox" Size="Size.Small" Color="Color.Info" />
+                    </MudTooltip>
+                }
+                @if (cartao.VinculosGit.OrderByDescending(v => v.AtualizadoEm).FirstOrDefault() is { } pr)
+                {
+                    <MudTooltip Text="@($"PR {pr.Titulo}")">
+                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.MergeType" Variant="Variant.Outlined"
+                                 Color="@(pr.Estado switch { EstadoPullRequest.Mergeado => Color.Secondary, EstadoPullRequest.Fechado => Color.Default, _ => Color.Success })">
+                            @(pr.Estado switch { EstadoPullRequest.Mergeado => "mergeado", EstadoPullRequest.Fechado => "fechado", _ => "PR aberto" })
+                        </MudChip>
+                    </MudTooltip>
+                }
+                @if (cartao.Prioridade.HasValue)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="CorPrioridade(cartao.Prioridade.Value)">@cartao.Prioridade.Value</MudChip>
+                }
+                @if (cartao.DataInicio.HasValue)
+                {
+                    <MudTooltip Text="Início">
+                        <MudText Typo="Typo.caption">
+                            <MudIcon Icon="@Icons.Material.Filled.PlayArrow" Size="Size.Small" /> @cartao.DataInicio.Value.ToLocalTime().ToString("dd/MM/yyyy")
+                        </MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.Prazo.HasValue)
+                {
+                    <MudTooltip Text="Prazo">
+                        <MudText Typo="Typo.caption" Color="CorPrazo(cartao.Prazo.Value)">
+                            <MudIcon Icon="@Icons.Material.Filled.Event" Size="Size.Small" /> @cartao.Prazo.Value.ToLocalTime().ToString("dd/MM/yyyy")
+                        </MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.Estimativa.HasValue)
+                {
+                    <MudTooltip Text="Estimativa (pontos)">
+                        <MudText Typo="Typo.caption"><MudIcon Icon="@Icons.Material.Filled.Speed" Size="Size.Small" /> @cartao.Estimativa.Value.ToString("0.##")</MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.ItensTarefa.Count > 0)
+                {
+                    <MudTooltip Text="Tarefas concluídas">
+                        <MudText Typo="Typo.caption"><MudIcon Icon="@Icons.Material.Filled.Checklist" Size="Size.Small" /> @cartao.ItensTarefa.Count(i => i.Concluido)/@cartao.ItensTarefa.Count</MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.Comentarios.Count > 0)
+                {
+                    <MudTooltip Text="Comentários">
+                        <MudText Typo="Typo.caption"><MudIcon Icon="@Icons.Material.Filled.Comment" Size="Size.Small" /> @cartao.Comentarios.Count</MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.Reunioes.Count > 0)
+                {
+                    <MudTooltip Text="Reuniões">
+                        <MudText Typo="Typo.caption"><MudIcon Icon="@Icons.Material.Filled.Groups" Size="Size.Small" /> @cartao.Reunioes.Count</MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.Anexos.Count > 0)
+                {
+                    <MudTooltip Text="Anexos">
+                        <MudText Typo="Typo.caption"><MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" /> @cartao.Anexos.Count</MudText>
+                    </MudTooltip>
+                }
+                @if (cartao.CartosFilhos.Count > 0)
+                {
+                    <MudTooltip Text="Cartões filhos concluídos">
+                        <MudText Typo="Typo.caption"><MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" /> @cartao.CartosFilhos.Count(f => f.Lista.Nome.Equals("Concluído", StringComparison.OrdinalIgnoreCase))/@cartao.CartosFilhos.Count</MudText>
+                    </MudTooltip>
+                }
+                @if (TemConflitoData(cartao))
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Error" OnClick="@(() => MostrarConflito(cartao))">Conflito de data</MudChip>
+                }
+                @if (EstaBloqueado(cartao))
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Bloqueado</MudChip>
+                }
+            </div>
+        </MudPaper>
+    }
+
+    private string? NomeListaCompleto(int listaId)
+    {
+        var lista = _listas.FirstOrDefault(l => l.Id == listaId);
+        return lista is null ? null : ListasQuadro.NomeCompleto(lista, _listas);
+    }
+
+    private string? NomeUsuario(int? id) => id.HasValue ? _usuarios.FirstOrDefault(u => u.Id == id)?.Nome : null;
+
+    private string NomesDesenvolvedores(Cartao cartao)
+        => string.Join(", ", cartao.Desenvolvedores.OrderByDescending(d => d.Principal).Select(d => NomeUsuario(d.UsuarioId)).OfType<string>());
+
+    // Campos personalizados são definidos por lista; na tabela, campos de mesmo nome em listas diferentes viram uma coluna só.
+    private IEnumerable<string> NomesCamposPersonalizados
+        => _listas.SelectMany(l => l.DefinicoesCampo).Where(d => !d.Excluido)
+            .Select(d => d.Nome.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n);
+
+    private (DefinicaoCampo? Campo, string? Valor) ValorCampo(Cartao cartao, string nomeCampo)
+    {
+        var campo = _listas.FirstOrDefault(l => l.Id == cartao.ListaId)?.DefinicoesCampo
+            .FirstOrDefault(d => !d.Excluido && d.Nome.Trim().Equals(nomeCampo, StringComparison.OrdinalIgnoreCase));
+        if (campo is null)
+        {
+            var idsMesmoNome = _listas.SelectMany(l => l.DefinicoesCampo)
+                .Where(d => !d.Excluido && d.Nome.Trim().Equals(nomeCampo, StringComparison.OrdinalIgnoreCase)).ToList();
+            var valor = cartao.ValoresCampo.Where(v => idsMesmoNome.Any(d => d.Id == v.DefinicaoCampoId))
+                .OrderByDescending(v => v.DataPreenchimento).FirstOrDefault();
+            return valor is null ? (null, null) : (idsMesmoNome.First(d => d.Id == valor.DefinicaoCampoId), valor.Valor);
+        }
+        return (campo, CamposCartao.ValorMaisRecente(cartao.ValoresCampo, campo.Id));
+    }
+
+    private string? ValorCampoFormatado(Cartao cartao, string nomeCampo)
+    {
+        var (campo, valor) = ValorCampo(cartao, nomeCampo);
+        return campo is null || string.IsNullOrWhiteSpace(valor) ? null : CamposCartao.Formatar(campo.Tipo, valor);
+    }
+
+    private object? ChaveOrdenacaoCampo(Cartao cartao, string nomeCampo)
+    {
+        var (campo, valor) = ValorCampo(cartao, nomeCampo);
+        if (campo is null || string.IsNullOrWhiteSpace(valor)) return null;
+        return campo.Tipo switch
+        {
+            TipoCampo.Numero => decimal.TryParse(valor, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null,
+            TipoCampo.Data => DateTime.TryParse(valor, out var d) ? d : null,
+            _ => valor
+        };
+    }
+
+    private IEnumerable<Cartao> CartoesFiltrados
+        => _listas.SelectMany(l => l.Cartoes).Where(FiltrarCartao).OrderBy(c => c.Ordem);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _carregando = true;
+        await CarregarQuadro();
+        _carregando = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _dotNetRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("kanbanDnd.registrarQuadro", _dotNetRef);
+        _hub = new Microsoft.AspNetCore.SignalR.Client.HubConnectionBuilder()
+            .WithUrl(Nav.ToAbsoluteUri("/hubs/quadro"))
+            .WithAutomaticReconnect()
+            .Build();
+        _hub.On("QuadroAtualizado", () => InvokeAsync(RecarregarPorAvisoAsync));
+        await _hub.StartAsync();
+        await _hub.SendAsync("EntrarNoQuadro", QuadroId);
+
+        var cartaoLink = _listas.SelectMany(l => l.Cartoes).FirstOrDefault(c => c.Id == CartaoAbrirId);
+        if (cartaoLink is not null) await AbrirDetalhes(cartaoLink);
+    }
+
+    // Um único SaveChanges pode gerar vários avisos seguidos; enquanto um recarregamento roda,
+    // os avisos seguintes são agrupados em uma única nova carga ao final.
+    private async Task RecarregarPorAvisoAsync()
+    {
+        if (_recarregando)
+        {
+            _recarregarNovamente = true;
+            return;
+        }
+        _recarregando = true;
+        try
+        {
+            do
+            {
+                _recarregarNovamente = false;
+                await CarregarQuadro();
+                StateHasChanged();
+            } while (_recarregarNovamente);
+        }
+        finally
+        {
+            _recarregando = false;
+        }
+    }
+
+    // Usa um DbContext próprio: o recarregamento pode ser disparado pelo SignalR enquanto um diálogo
+    // ou outra ação ainda usa o DbContext do circuito, e DbContext não aceita operações concorrentes.
+    private async Task CarregarQuadro()
+    {
+        using var escopo = ScopeFactory.CreateScope();
+        var db = escopo.ServiceProvider.GetRequiredService<KanbanDbContext>();
+        _quadro = await db.Quadros.AsNoTracking().FirstOrDefaultAsync(q => q.Id == QuadroId && !q.Excluido);
+        if (_quadro is null) return;
+        _sistemas = await db.Sistemas.AsNoTracking().Where(s => s.Ativo).OrderBy(s => s.Nome).ToListAsync();
+        _usuarios = await db.Usuarios.AsNoTracking().Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        _etiquetas = await db.Etiquetas.AsNoTracking().Where(e => e.QuadroId == QuadroId && !e.Excluido).OrderBy(e => e.Nome).ToListAsync();
+        _listas = await db.Listas.AsNoTracking().AsSplitQuery()
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Sistema)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.ItensTarefa)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Comentarios)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Anexos)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Reunioes)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.CartosFilhos.Where(f => !f.Excluido))
+            .ThenInclude(f => f.Lista)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.ValoresCampo)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Desenvolvedores)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Etiquetas)
+            .ThenInclude(ce => ce.Etiqueta)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.RelacoesDestino)
+            .ThenInclude(r => r.CartaoOrigem)
+            .ThenInclude(o => o.Lista)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.RelacoesOrigem)
+            .ThenInclude(r => r.CartaoDestino)
+            .ThenInclude(d => d.Lista)
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.Alertas.Where(a => !a.Resolvido))
+            .Include(l => l.Cartoes.Where(c => !c.Excluido))
+            .ThenInclude(c => c.VinculosGit.Where(v => v.Tipo == TipoVinculoGit.PullRequest))
+            .Include(l => l.DefinicoesCampo)
+            .Where(l => l.QuadroId == QuadroId && !l.Excluido)
+            .OrderBy(l => l.ListaPaiId).ThenBy(l => l.Ordem).ToListAsync();
+        _nomesListas = _listas.ToDictionary(l => l.Id, l => l.Nome);
+        _sugestoesPorCartao = (await db.SugestoesAutomacao.AsNoTracking()
+                .Where(s => s.QuadroId == QuadroId && s.Status == StatusSugestao.Pendente)
+                .GroupBy(s => s.CartaoId).Select(g => new { g.Key, Total = g.Count() }).ToListAsync())
+            .ToDictionary(x => x.Key, x => x.Total);
+    }
+
+    private async Task AdicionarLista()
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogNovaLista>("Nova lista", new DialogParameters<Shared.DialogNovaLista> { { x => x.QuadroId, QuadroId } });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadro();
+    }
+
+    private async Task AdicionarCartao(Lista lista)
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogNovoCartao>("Novo cartão", new DialogParameters<Shared.DialogNovoCartao> { { x => x.ListaId, lista.Id } }, OpcoesDialogoCartao);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadro();
+    }
+
+    private async Task AdicionarSublista(Lista lista)
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogNovaLista>("Nova sublista",
+            new DialogParameters<Shared.DialogNovaLista> { { x => x.QuadroId, QuadroId }, { x => x.ListaPaiId, lista.Id } });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadro();
+    }
+
+    private async Task ConfigurarCampos(Lista lista)
+    {
+        await Dialog.ShowAsync<Shared.DialogCamposLista>("Campos da lista",
+            new DialogParameters<Shared.DialogCamposLista> { { x => x.ListaId, lista.Id }, { x => x.ListaNome, lista.Nome } });
+    }
+
+    private async Task GerenciarEtiquetas()
+    {
+        await Dialog.ShowAsync<Shared.DialogEtiquetas>("Etiquetas do quadro",
+            new DialogParameters<Shared.DialogEtiquetas> { { x => x.QuadroId, QuadroId } });
+        await CarregarQuadro();
+    }
+
+    private async Task EditarCartao(Cartao cartao)
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogNovoCartao>("Editar cartão", new DialogParameters<Shared.DialogNovoCartao> { { x => x.CartaoId, cartao.Id } }, OpcoesDialogoCartao);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadro();
+    }
+
+    private static readonly DialogOptions OpcoesDialogoCartao = new() { MaxWidth = MaxWidth.Medium, FullWidth = true };
+
+    private async Task ExcluirCartao(Cartao cartao)
+    {
+        var confirmado = await Dialog.ShowMessageBox("Excluir cartão",
+            $"Excluir o cartão '{cartao.Titulo}'? Ele deixará de aparecer no quadro.",
+            yesText: "Excluir", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        if (await Movimentacao.ExcluirAsync(cartao.Id))
+            Snackbar.Add("Cartão excluído.", Severity.Success);
+        await CarregarQuadro();
+    }
+
+    private async Task AbrirDetalhes(Cartao cartao)
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogDetalhesCartao>("Detalhes do cartão",
+            new DialogParameters<Shared.DialogDetalhesCartao> { { x => x.CartaoId, cartao.Id } },
+            new DialogOptions { FullScreen = true, CloseButton = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadro();
+    }
+
+    private IEnumerable<Cartao> FiltrarCartoes(Lista lista)
+        => lista.Cartoes.Where(FiltrarCartao);
+
+    private bool FiltrarCartao(Cartao cartao)
+    {
+        if (_listaFiltro.HasValue && cartao.ListaId != _listaFiltro) return false;
+        if (_sistemaFiltro.HasValue && cartao.SistemaId != _sistemaFiltro) return false;
+        if (_prioridadeFiltro.HasValue && cartao.Prioridade != _prioridadeFiltro) return false;
+        if (_desenvolvedorFiltro.HasValue && !cartao.Desenvolvedores.Any(d => d.UsuarioId == _desenvolvedorFiltro)) return false;
+        if (_solicitanteFiltro.HasValue && cartao.SolicitanteId != _solicitanteFiltro) return false;
+        if (_etiquetaFiltro.HasValue && !cartao.Etiquetas.Any(e => e.EtiquetaId == _etiquetaFiltro)) return false;
+        if (_somenteMeus)
+        {
+            var usuarioAtualId = UsuarioProvider.ObterIdUsuarioAtual();
+            if (!cartao.Desenvolvedores.Any(d => d.UsuarioId == usuarioAtualId)) return false;
+        }
+        if (_dataDe.HasValue || _dataAte.HasValue)
+        {
+            var data = ObterCampoData(cartao);
+            if (!data.HasValue) return false;
+            if (_dataDe.HasValue && data.Value.Date < _dataDe.Value.Date) return false;
+            if (_dataAte.HasValue && data.Value.Date > _dataAte.Value.Date) return false;
+        }
+        if (!string.IsNullOrWhiteSpace(_busca)
+            && !cartao.Titulo.Contains(_busca, StringComparison.OrdinalIgnoreCase)
+            && !(cartao.Descricao?.Contains(_busca, StringComparison.OrdinalIgnoreCase) ?? false)) return false;
+        return true;
+    }
+
+    private DateTime? ObterCampoData(Cartao cartao) => _campoDataFiltro switch
+    {
+        CampoDataFiltro.Inicio => cartao.DataInicio?.ToLocalTime(),
+        CampoDataFiltro.Criacao => cartao.CriadoEm.ToLocalTime(),
+        _ => cartao.Prazo?.ToLocalTime()
+    };
+
+    private void LimparFiltros()
+    {
+        _listaFiltro = null; _sistemaFiltro = null; _prioridadeFiltro = null;
+        _desenvolvedorFiltro = null; _solicitanteFiltro = null; _etiquetaFiltro = null;
+        _somenteMeus = false; _dataDe = null; _dataAte = null; _busca = null;
+    }
+
+    private void AlternarSomenteMeus() => _somenteMeus = !_somenteMeus;
+
+    private void AlternarVisao() => _visaoTabela = !_visaoTabela;
+
+
+    private bool TemConflitoData(Cartao cartao) => ObterConflitos(cartao).Count > 0;
+
+    private List<Cartao> ObterConflitos(Cartao cartao)
+        => ConflitosAgenda.Encontrar(cartao, _listas.SelectMany(l => l.Cartoes), c => ListasQuadro.EhConcluido(c.ListaId, _listas));
+
+    private static Color CorAlerta(SeveridadeAlerta severidade) => severidade switch
+    {
+        SeveridadeAlerta.Critico => Color.Error,
+        SeveridadeAlerta.Aviso => Color.Warning,
+        _ => Color.Info
+    };
+
+    private static string IconeAlerta(SeveridadeAlerta severidade) => severidade switch
+    {
+        SeveridadeAlerta.Critico => Icons.Material.Filled.Error,
+        SeveridadeAlerta.Aviso => Icons.Material.Filled.Warning,
+        _ => Icons.Material.Filled.Info
+    };
+
+    private async Task ResolverAlerta(AlertaCartao alerta)
+    {
+        var confirmado = await Dialog.ShowMessageBox("Resolver alerta", $"Marcar o alerta \"{alerta.Mensagem}\" como resolvido?", yesText: "Resolver", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        var entidade = await Db.AlertasCartao.FirstOrDefaultAsync(a => a.Id == alerta.Id);
+        if (entidade is null || entidade.Resolvido) return;
+        entidade.Resolvido = true;
+        entidade.ResolvidoEm = DateTime.UtcNow;
+        entidade.ResolvidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        await CarregarQuadro();
+    }
+
+    private void MostrarConflito(Cartao cartao)
+    {
+        var conflitos = ObterConflitos(cartao);
+        if (conflitos.Count == 0) return;
+        var titulos = string.Join(", ", conflitos.Select(c => c.Titulo));
+        Snackbar.Add($"Conflito de data com: {titulos}", Severity.Warning);
+    }
+
+    /// <summary>
+    /// Uma relação é sempre gravada com CartaoOrigemId = cartão que estava aberto no momento da criação
+    /// do vínculo. "BloqueadoPor" registrado a partir do cartão A (origem=A) significa "A é bloqueado por
+    /// destino", então A está bloqueado se destino não estiver concluído. "Bloqueia" registrado a partir de
+    /// A (origem=A) significa "A bloqueia destino", então quem fica bloqueado é o destino, não A.
+    /// </summary>
+    private static bool EstaBloqueado(Cartao cartao)
+        => cartao.RelacoesOrigem.Any(r => r.Tipo == TipoRelacaoCartao.BloqueadoPor
+                && !r.CartaoDestino.Lista.Nome.Equals("Concluído", StringComparison.OrdinalIgnoreCase))
+        || cartao.RelacoesDestino.Any(r => r.Tipo == TipoRelacaoCartao.Bloqueia
+                && !r.CartaoOrigem.Lista.Nome.Equals("Concluído", StringComparison.OrdinalIgnoreCase));
+
+    [JSInvokable]
+    public Task ReordenarListaAsync(int origemId, int destinoId) => InvokeAsync(async () =>
+    {
+        if (origemId == destinoId) return;
+        var origem = _listas.FirstOrDefault(l => l.Id == origemId);
+        var destino = _listas.FirstOrDefault(l => l.Id == destinoId);
+        if (origem is null || destino is null || origem.ListaPaiId != destino.ListaPaiId) return;
+
+        var irmas = _listas.Where(l => l.ListaPaiId == destino.ListaPaiId).OrderBy(l => l.Ordem).Select(l => l.Id).ToList();
+        var indiceDestino = irmas.IndexOf(destinoId);
+        var paraDireita = irmas.IndexOf(origemId) < indiceDestino;
+        irmas.Remove(origemId);
+        irmas.Insert(irmas.IndexOf(destinoId) + (paraDireita ? 1 : 0), origemId);
+        await SalvarOrdemListasAsync(irmas);
+        StateHasChanged();
+    });
+
+    private void MoverCartaoNaTela(int cartaoId, int listaDestinoId, int? cartaoAlvoId)
+    {
+        var folha = ListasQuadro.PrimeiraFolha(listaDestinoId, _listas);
+        if (folha != listaDestinoId) (listaDestinoId, cartaoAlvoId) = (folha, null);
+        var origem = _listas.FirstOrDefault(l => l.Cartoes.Any(c => c.Id == cartaoId));
+        var destino = _listas.FirstOrDefault(l => l.Id == listaDestinoId);
+        if (origem is null || destino is null || cartaoAlvoId == cartaoId) return;
+
+        var cartao = origem.Cartoes.First(c => c.Id == cartaoId);
+        origem.Cartoes.Remove(cartao);
+        var ordenados = destino.Cartoes.OrderBy(c => c.Ordem).ToList();
+        var indice = cartaoAlvoId.HasValue ? ordenados.FindIndex(c => c.Id == cartaoAlvoId.Value) : -1;
+        ordenados.Insert(indice < 0 ? ordenados.Count : indice, cartao);
+        for (var i = 0; i < ordenados.Count; i++) ordenados[i].Ordem = i;
+        cartao.ListaId = listaDestinoId;
+        destino.Cartoes.Add(cartao);
+    }
+
+    [JSInvokable]
+    public Task MoverCartaoAsync(int cartaoId, int listaDestinoId, int? cartaoAlvoId) => InvokeAsync(async () =>
+    {
+        MoverCartaoNaTela(cartaoId, listaDestinoId, cartaoAlvoId);
+        StateHasChanged();
+        await Assistente.MoverAsync(cartaoId, listaDestinoId, cartaoAlvoId);
+        await CarregarQuadro();
+        StateHasChanged();
+    });
+
+    private async Task ReordenarCartao(Lista lista, Cartao cartao, int deslocamento)
+    {
+        var ordenados = lista.Cartoes.OrderBy(c => c.Ordem).ToList();
+        var indice = ordenados.FindIndex(c => c.Id == cartao.Id);
+        var novoIndice = indice + deslocamento;
+        if (indice < 0 || novoIndice < 0 || novoIndice >= ordenados.Count) return;
+        var vizinho = ordenados[novoIndice];
+        (cartao.Ordem, vizinho.Ordem) = (vizinho.Ordem, cartao.Ordem);
+        var atual = await Db.Cartoes.Where(c => c.Id == cartao.Id || c.Id == vizinho.Id).ToListAsync();
+        var atualCartao = atual.First(c => c.Id == cartao.Id);
+        var atualVizinho = atual.First(c => c.Id == vizinho.Id);
+        atualCartao.Ordem = cartao.Ordem;
+        atualVizinho.Ordem = vizinho.Ordem;
+        await Db.SaveChangesAsync();
+        await CarregarQuadro();
+    }
+
+    private async Task ReordenarLista(Lista lista, int deslocamento)
+    {
+        var irmas = _listas.Where(l => l.ListaPaiId == lista.ListaPaiId).OrderBy(l => l.Ordem).Select(l => l.Id).ToList();
+        var indice = irmas.IndexOf(lista.Id);
+        var novoIndice = indice + deslocamento;
+        if (indice < 0 || novoIndice < 0 || novoIndice >= irmas.Count) return;
+        (irmas[indice], irmas[novoIndice]) = (irmas[novoIndice], irmas[indice]);
+        await SalvarOrdemListasAsync(irmas);
+    }
+
+    private async Task SalvarOrdemListasAsync(List<int> irmas)
+    {
+        if (!CaminhoQuadro.RespeitaCaminho(irmas, _listas))
+        {
+            Snackbar.Add("Essa ordem contraria o caminho configurado do quadro.", Severity.Warning);
+            return;
+        }
+        var entidades = await Db.Listas.Where(l => irmas.Contains(l.Id)).ToListAsync();
+        for (var i = 0; i < irmas.Count; i++)
+            entidades.First(l => l.Id == irmas[i]).Ordem = i;
+        await Db.SaveChangesAsync();
+        await CarregarQuadro();
+    }
+
+    private async Task ConfigurarCaminho()
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogCaminhoQuadro>("Caminho do quadro",
+            new DialogParameters<Shared.DialogCaminhoQuadro> { { x => x.QuadroId, QuadroId } },
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadro();
+    }
+
+    private void Voltar() => Nav.NavigateTo("/");
+
+    private static Color CorPrioridade(Prioridade prioridade) => prioridade switch
+    {
+        Prioridade.Critica => Color.Error,
+        Prioridade.Alta => Color.Warning,
+        Prioridade.Baixa => Color.Info,
+        _ => Color.Default
+    };
+
+    private static Color CorPrazo(DateTime prazo) => prazo.Date < DateTime.Today ? Color.Error : prazo.Date <= DateTime.Today.AddDays(2) ? Color.Warning : Color.Default;
+
+    private string UrlExportacao(string formato)
+    {
+        var parametros = new List<string> { $"quadroId={QuadroId}" };
+        if (!string.IsNullOrWhiteSpace(_busca)) parametros.Add($"busca={Uri.EscapeDataString(_busca)}");
+        if (_sistemaFiltro.HasValue) parametros.Add($"sistemaId={_sistemaFiltro.Value}");
+        if (_desenvolvedorFiltro.HasValue) parametros.Add($"desenvolvedorId={_desenvolvedorFiltro.Value}");
+        if (_solicitanteFiltro.HasValue) parametros.Add($"solicitanteId={_solicitanteFiltro.Value}");
+        if (_listaFiltro.HasValue) parametros.Add($"listaId={_listaFiltro.Value}");
+        if (_prioridadeFiltro.HasValue) parametros.Add($"prioridade={_prioridadeFiltro.Value}");
+        if (_etiquetaFiltro.HasValue) parametros.Add($"etiquetaId={_etiquetaFiltro.Value}");
+        if (_somenteMeus) parametros.Add($"responsavelId={UsuarioProvider.ObterIdUsuarioAtual()}");
+        if (_dataDe.HasValue || _dataAte.HasValue)
+        {
+            parametros.Add($"campoData={_campoDataFiltro.ToString().ToLowerInvariant()}");
+            if (_dataDe.HasValue) parametros.Add($"dataDe={_dataDe.Value:yyyy-MM-dd}");
+            if (_dataAte.HasValue) parametros.Add($"dataAte={_dataAte.Value:yyyy-MM-dd}");
+        }
+        return $"/api/export/cartoes.{formato}?{string.Join("&", parametros)}";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _dotNetRef?.Dispose();
+        if (_hub is null) return;
+        await _hub.SendAsync("SairDoQuadro", QuadroId);
+        await _hub.DisposeAsync();
+    }
+}

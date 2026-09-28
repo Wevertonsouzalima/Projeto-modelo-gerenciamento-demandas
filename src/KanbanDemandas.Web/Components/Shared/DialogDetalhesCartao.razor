@@ -1,0 +1,1220 @@
+@inject KanbanDbContext Db
+@inject IUsuarioAtualProvider UsuarioProvider
+@inject ISnackbar Snackbar
+@inject IAnexoStorage AnexoStorage
+@inject IEmailSender EmailSender
+@inject IConfiguration Configuracao
+@inject IDialogService Dialog
+@inject MovimentacaoCartaoService Movimentacao
+@inject AssistenteMovimentacao Assistente
+@inject ValoresCampoService ValoresCampo
+@inject NavigationManager Nav
+@inject MotorAutomacoes Motor
+@inject KanbanDemandas.Web.Services.Portal.NotificadorSolicitante NotificadorSolicitante
+
+<MudDialog>
+    <DialogContent>
+        @if (_cartao is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <div class="d-flex align-start justify-space-between gap-3">
+                <div>
+                    <MudTooltip Text="Código do cartão: cite em commits, branches e pull requests para vincular">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Tag">@CodigoCartao.Formatar(_cartao.Id, Configuracao["Cartao:PrefixoCodigo"])</MudChip>
+                    </MudTooltip>
+                    @if (_cartao.OrigemPortal)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Inbox">Portal@(string.IsNullOrWhiteSpace(_cartao.TipoSolicitacao) ? "" : $" · {_cartao.TipoSolicitacao}")</MudChip>
+                    }
+                    <MudText Typo="Typo.h5" Class="font-weight-bold" Style="overflow-wrap:anywhere">@_cartao.Titulo</MudText>
+                </div>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="Excluir" Class="flex-shrink-0">Excluir cartão</MudButton>
+            </div>
+
+            <MudGrid Class="mt-1">
+            <MudItem xs="12" md="8" Style="min-width:0">
+            <MudTabs Elevation="0" MinimumTabWidth="96px">
+                <MudTabPanel Text="Linha do tempo" Icon="@Icons.Material.Filled.Timeline">
+                    @{ var linhaDoTempo = MontarLinhaDoTempo(); }
+                    <MudTimeline Class="mt-3">
+                        @foreach (var item in linhaDoTempo.Take(_limiteLinhaDoTempo))
+                        {
+                            <MudTimelineItem Color="item.Cor" Icon="@item.Icone">
+                                <MudText Typo="Typo.subtitle2">
+                                    @item.Titulo
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary" Inline="true"> — @item.Quando.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</MudText>
+                                </MudText>
+                                @if (!string.IsNullOrWhiteSpace(item.Detalhe))
+                                {
+                                    <MudText Typo="Typo.body2">@item.Detalhe</MudText>
+                                }
+                            </MudTimelineItem>
+                        }
+                    </MudTimeline>
+                    @if (linhaDoTempo.Count > _limiteLinhaDoTempo)
+                    {
+                        <MudButton Variant="Variant.Text" FullWidth="true" StartIcon="@Icons.Material.Filled.ExpandMore" OnClick="@(() => _limiteLinhaDoTempo += ItensPorPagina)">
+                            Carregar mais (@(linhaDoTempo.Count - _limiteLinhaDoTempo) restantes)
+                        </MudButton>
+                    }
+                </MudTabPanel>
+                <MudTabPanel Text="Detalhes" Icon="@Icons.Material.Filled.Description">
+                    <MudTextField @bind-Value="_descricao" Label="Descrição" Lines="5" Class="mt-3" />
+                    <div class="d-flex justify-end mt-3">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SalvarDescricao">Salvar descrição</MudButton>
+                    </div>
+
+                    @if (_campos.Count > 0)
+                    {
+                        <MudDivider Class="my-4" />
+                        <MudText Typo="Typo.subtitle1">Campos da lista</MudText>
+                        @foreach (var campo in _campos)
+                        {
+                            <div class="mt-3">
+                                <CampoListaEditor Campo="campo" Valor="@ObterValor(campo.Id)" ValorChanged="@(valor => DefinirValor(campo.Id, valor))" />
+                            </div>
+                        }
+                        <div class="d-flex justify-end mt-3">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="SalvarCampos">Salvar campos</MudButton>
+                        </div>
+                    }
+                </MudTabPanel>
+
+                <MudTabPanel Text="Tarefas" Icon="@Icons.Material.Filled.Checklist">
+                    <div class="d-flex gap-2 mt-3 align-center">
+                        <MudTextField @bind-Value="_novaTarefa" Label="Nova tarefa" Immediate="true" OnKeyUp="@(e => e.Key == "Enter" ? AdicionarTarefa() : Task.CompletedTask)" />
+                        <MudTooltip Text="Adicionar tarefa">
+                            <MudIconButton Icon="@Icons.Material.Filled.Add" Color="Color.Primary" Disabled="@(string.IsNullOrWhiteSpace(_novaTarefa) || _salvandoTarefa)" OnClick="AdicionarTarefa" />
+                        </MudTooltip>
+                    </div>
+                    @if (_cartao.ItensTarefa.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Class="mt-4 mud-text-secondary">Nenhuma tarefa adicionada.</MudText>
+                    }
+                    else
+                    {
+                        @foreach (var tarefa in _cartao.ItensTarefa.OrderBy(t => t.Ordem))
+                        {
+                            <MudPaper Class="pa-2 mt-3" Outlined="true">
+                                <div class="d-flex align-center gap-2">
+                                    <MudTooltip Text="@(tarefa.CartaoPromovidoId.HasValue ? "Acompanha o status do cartão filho" : null)" Disabled="@(!tarefa.CartaoPromovidoId.HasValue)">
+                                        <MudCheckBox T="bool" Value="tarefa.Concluido" ValueChanged="@(valor => AlternarTarefa(tarefa, valor))" Disabled="@tarefa.CartaoPromovidoId.HasValue" />
+                                    </MudTooltip>
+                                    <MudText Style="@(tarefa.Concluido ? "text-decoration:line-through" : null)" Class="flex-grow-1">@tarefa.Titulo</MudText>
+                                    @if (tarefa.CartaoPromovidoId.HasValue)
+                                    {
+                                        <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Launch" OnClick="@(() => AbrirCartaoPromovido(tarefa.CartaoPromovidoId.Value))">Ver cartão filho</MudButton>
+                                    }
+                                    else
+                                    {
+                                        <MudTooltip Text="Promover a cartão filho">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Launch" Size="Size.Small" OnClick="@(() => PromoverTarefa(tarefa))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@(_itensExpandidos.Contains(tarefa.Id) ? "Recolher" : "Descrição, comentários e reuniões do item")">
+                                            <MudIconButton Icon="@(_itensExpandidos.Contains(tarefa.Id) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)" Size="Size.Small" OnClick="@(() => AlternarExpandido(tarefa))" />
+                                        </MudTooltip>
+                                    }
+                                    <MudTooltip Text="Excluir tarefa">
+                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => ExcluirTarefa(tarefa))" />
+                                    </MudTooltip>
+                                </div>
+
+                                @if (_itensExpandidos.Contains(tarefa.Id))
+                                {
+                                    <div class="mt-1 pb-2 d-flex flex-column gap-4" style="padding-left: 2.75rem; padding-right: .5rem">
+                                        <div>
+                                            <MudTextField T="string" Value="@_itemDescricoes.GetValueOrDefault(tarefa.Id)" ValueChanged="@(v => { _itemDescricoes[tarefa.Id] = v; })" Label="Descrição do item" Lines="2" Variant="Variant.Outlined" />
+                                            <div class="d-flex justify-end mt-1">
+                                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => SalvarDescricaoItem(tarefa))">Salvar descrição</MudButton>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <MudText Typo="Typo.subtitle2">Comentários do item</MudText>
+                                            @foreach (var comentario in _itemComentarios.GetValueOrDefault(tarefa.Id) ?? [])
+                                            {
+                                                <div class="d-flex align-center gap-2 mt-1">
+                                                    <MudText Typo="Typo.body2" Class="flex-grow-1"><b>@comentario.Autor?.Nome:</b> @comentario.Texto</MudText>
+                                                    @if (comentario.AutorId == UsuarioProvider.ObterIdUsuarioAtual())
+                                                    {
+                                                        <MudTooltip Text="Excluir comentário">
+                                                            <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" OnClick="@(() => ExcluirComentarioItem(tarefa, comentario))" />
+                                                        </MudTooltip>
+                                                    }
+                                                </div>
+                                            }
+                                            <div class="d-flex gap-2 align-center">
+                                                <MudTextField T="string" Value="@_itemNovoComentario.GetValueOrDefault(tarefa.Id)" ValueChanged="@(v => { _itemNovoComentario[tarefa.Id] = v; })" Label="Comentar" Immediate="true" />
+                                                <MudTooltip Text="Enviar comentário">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="@(() => AdicionarComentarioItem(tarefa))" />
+                                                </MudTooltip>
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <MudText Typo="Typo.subtitle2">Reuniões do item</MudText>
+                                            @foreach (var reuniao in _itemReunioes.GetValueOrDefault(tarefa.Id) ?? [])
+                                            {
+                                                <div class="d-flex align-center gap-2 mt-1">
+                                                    <MudText Typo="Typo.body2" Class="flex-grow-1"><b>@reuniao.Data.ToLocalTime().ToString("dd/MM/yyyy"):</b> @reuniao.Ata</MudText>
+                                                    <MudTooltip Text="Excluir reunião">
+                                                        <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" OnClick="@(() => ExcluirReuniaoItem(tarefa, reuniao))" />
+                                                    </MudTooltip>
+                                                </div>
+                                            }
+                                            <div class="d-flex gap-3 align-end flex-wrap">
+                                                <MudDatePicker Date="@_itemDataReuniao.GetValueOrDefault(tarefa.Id, DateTime.Today)" DateChanged="@(v => { _itemDataReuniao[tarefa.Id] = v; })" Label="Data" Style="max-width:170px" />
+                                                <MudTextField T="string" Value="@_itemAta.GetValueOrDefault(tarefa.Id)" ValueChanged="@(v => { _itemAta[tarefa.Id] = v; })" Label="Ata" Class="flex-grow-1" Style="min-width:200px" />
+                                                <MudTooltip Text="Registrar reunião">
+                                                    <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Color="Color.Primary" OnClick="@(() => RegistrarReuniaoItem(tarefa))" />
+                                                </MudTooltip>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            </MudPaper>
+                        }
+                    }
+                </MudTabPanel>
+
+                <MudTabPanel Text="Comentários" Icon="@Icons.Material.Filled.Comment">
+                    <MudTextField @bind-Value="_novoComentario" Label="Adicionar comentário" Lines="3" Class="mt-3" />
+                    <div class="d-flex justify-space-between align-center mt-2">
+                        @if (_cartao.SolicitanteId.HasValue && ConversaNoPortal)
+                        {
+                            <MudTooltip Text="Comentários públicos aparecem para o solicitante no portal de solicitações; ele também é avisado por e-mail.">
+                                <MudSwitch T="bool" @bind-Value="_comentarioPublico" Color="Color.Info" Label="Visível ao solicitante" />
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <span></span>
+                        }
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@string.IsNullOrWhiteSpace(_novoComentario)" OnClick="AdicionarComentario">Comentar</MudButton>
+                    </div>
+                    @foreach (var comentario in _cartao.Comentarios.OrderByDescending(c => c.DataHora).Take(_limiteComentarios))
+                    {
+                        <MudPaper Class="pa-3 mt-3" Outlined="true">
+                            <div class="d-flex justify-space-between">
+                                <div class="d-flex align-center gap-1">
+                                    <MudText Typo="Typo.subtitle2">@comentario.Autor.Nome</MudText>
+                                    @if (comentario.Publico)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Public">público</MudChip>
+                                    }
+                                </div>
+                                <div class="d-flex align-center gap-2">
+                                    <MudText Typo="Typo.caption">@comentario.DataHora.ToLocalTime().ToString("dd/MM/yyyy HH:mm")@(comentario.Editado ? " (editado)" : "")</MudText>
+                                    @if (comentario.AutorId == UsuarioProvider.ObterIdUsuarioAtual() && _comentarioEditandoId != comentario.Id)
+                                    {
+                                        <MudTooltip Text="Editar comentário">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="@(() => IniciarEdicaoComentario(comentario))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="Excluir comentário">
+                                            <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" OnClick="@(() => ExcluirComentario(comentario))" />
+                                        </MudTooltip>
+                                    }
+                                </div>
+                            </div>
+                            @if (_comentarioEditandoId == comentario.Id)
+                            {
+                                <MudTextField T="string" @bind-Value="_comentarioEditandoTexto" Lines="2" Class="mt-1" />
+                                <div class="d-flex gap-2 justify-end mt-1">
+                                    <MudButton Size="Size.Small" OnClick="@(() => _comentarioEditandoId = null)">Cancelar</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => SalvarEdicaoComentario(comentario))">Salvar</MudButton>
+                                </div>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Class="mt-1">@comentario.Texto</MudText>
+                            }
+                        </MudPaper>
+                    }
+                    @if (_cartao.Comentarios.Count > _limiteComentarios)
+                    {
+                        <MudButton Variant="Variant.Text" FullWidth="true" StartIcon="@Icons.Material.Filled.ExpandMore" Class="mt-2" OnClick="@(() => _limiteComentarios += ItensPorPagina)">
+                            Carregar mais (@(_cartao.Comentarios.Count - _limiteComentarios) restantes)
+                        </MudButton>
+                    }
+                </MudTabPanel>
+                <MudTabPanel Text="Reuniões" Icon="@Icons.Material.Filled.Groups">
+                    <MudDatePicker @bind-Date="_dataReuniao" Label="Data da reunião" Class="mt-3" />
+                    <MultiSelecaoFiltro Label="Participantes" Class="mt-3"
+                                        Opcoes="@(_usuarios.Select(u => new OpcaoSelecao(u.Id, u.Nome)).ToList())"
+                                        Selecionados="_participantes" SelecionadosChanged="SelecionarParticipantes" />
+                    <MudTextField @bind-Value="_ata" Label="Ata e decisões" Lines="4" Class="mt-3" />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@string.IsNullOrWhiteSpace(_ata)" OnClick="RegistrarReuniao" Class="mt-3">Registrar reunião</MudButton>
+                    @foreach (var reuniao in _reunioes.OrderByDescending(r => r.Data))
+                    {
+                        <MudPaper Class="pa-3 mt-3" Outlined="true">
+                            <div class="d-flex align-center justify-space-between">
+                                <MudText Typo="Typo.subtitle2">@reuniao.Data.ToLocalTime().ToString("dd/MM/yyyy")</MudText>
+                                <MudTooltip Text="Excluir reunião">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" OnClick="@(() => ExcluirReuniao(reuniao))" />
+                                </MudTooltip>
+                            </div>
+                            <MudText Typo="Typo.body2" Style="white-space:pre-wrap">@reuniao.Ata</MudText>
+                        </MudPaper>
+                    }
+                </MudTabPanel>
+                <MudTabPanel Text="Anexos" Icon="@Icons.Material.Filled.AttachFile">
+                    <InputFile OnChange="AdicionarAnexo" class="mt-3" />
+                    @foreach (var anexo in _cartao.Anexos.OrderByDescending(a => a.CriadoEm))
+                    {
+                        <div class="d-flex align-center justify-space-between mt-3">
+                            <MudText Typo="Typo.body2">@anexo.NomeOriginal (@(anexo.TamanhoBytes / 1024) KB)</MudText>
+                            <div class="d-flex align-center">
+                                <MudButton Href="@($"/api/anexos/{anexo.Id}")" Target="_blank" Variant="Variant.Text">Baixar</MudButton>
+                                <MudTooltip Text="Excluir anexo">
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small" OnClick="@(() => ExcluirAnexo(anexo))" />
+                                </MudTooltip>
+                            </div>
+                        </div>
+                    }
+                </MudTabPanel>
+                <MudTabPanel Text="E-mail" Icon="@Icons.Material.Filled.Email">
+                    @if (!_emailPreVisualizando)
+                    {
+                        @if (SugestoesDestinatario.Count > 0)
+                        {
+                            <div class="d-flex flex-wrap align-center gap-2 mt-3">
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">Sugestões:</MudText>
+                                @foreach (var (papel, usuario) in SugestoesDestinatario)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.PersonAdd" OnClick="@(() => AdicionarDestinatario(usuario.Email))">@papel · @usuario.Nome</MudChip>
+                                }
+                            </div>
+                        }
+                        <MudTextField @bind-Value="_emailPara" Label="Para" HelperText="Separe vários e-mails com ; ou ," Class="mt-2" />
+                        <MudTextField @bind-Value="_emailAssunto" Label="Assunto" Class="mt-2" />
+                        <MudTextField @bind-Value="_emailCorpo" Label="Mensagem" Lines="8" Class="mt-2"
+                                      HelperText="Marcadores disponíveis: {titulo}, {prazo}, {lista}, {solicitante}, {link}" />
+                        <div class="d-flex flex-wrap gap-2 mt-3">
+                            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Description" OnClick="AplicarModeloEmail">Usar modelo de cobrança</MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Preview"
+                                       Disabled="@(string.IsNullOrWhiteSpace(_emailPara) || string.IsNullOrWhiteSpace(_emailCorpo))" OnClick="PreVisualizarEmail">Revisar rascunho</MudButton>
+                        </div>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">Rascunho — confira como o e-mail será enviado.</MudAlert>
+                        <MudPaper Outlined="true" Class="pa-4 mt-3">
+                            <MudText Typo="Typo.body2"><b>Para:</b> @_emailPara</MudText>
+                            <MudText Typo="Typo.body2" Class="mt-1"><b>Assunto:</b> @AssuntoEmailFinal</MudText>
+                            <MudDivider Class="my-3" />
+                            <div class="email-preview">@((MarkupString)MontarCorpoEmailHtml())</div>
+                        </MudPaper>
+                        <div class="d-flex flex-wrap gap-2 mt-3">
+                            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => _emailPreVisualizando = false)">Voltar e editar</MudButton>
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send" OnClick="EnviarEmail">Enviar e-mail</MudButton>
+                        </div>
+                    }
+                </MudTabPanel>
+                <MudTabPanel Text="Código" Icon="@Icons.Material.Filled.Code" BadgeData="@(_vinculosGit.Count > 0 ? _vinculosGit.Count : null)">
+                    @if (_vinculosGit.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                            Nenhum vínculo com o GitHub. Cite <b>@CodigoCartao.Formatar(_cartao.Id, Configuracao["Cartao:PrefixoCodigo"])</b> no nome da branch,
+                            na mensagem do commit ou no título do pull request.
+                        </MudAlert>
+                    }
+                    @foreach (var grupo in _vinculosGit.GroupBy(v => v.Tipo).OrderByDescending(g => g.Key))
+                    {
+                        <MudText Typo="Typo.subtitle2" Class="mt-3">@(grupo.Key switch { TipoVinculoGit.PullRequest => "Pull requests", TipoVinculoGit.Branch => "Branches", _ => "Commits" })</MudText>
+                        @foreach (var vinculo in grupo.OrderByDescending(v => v.AtualizadoEm))
+                        {
+                            <div class="d-flex align-center gap-2 mt-1">
+                                <MudIcon Icon="@(vinculo.Tipo switch { TipoVinculoGit.PullRequest => Icons.Material.Filled.MergeType, TipoVinculoGit.Branch => Icons.Material.Filled.AccountTree, _ => Icons.Material.Filled.Commit })" Size="Size.Small" />
+                                <MudLink Href="@vinculo.Url" Target="_blank" Typo="Typo.body2">@vinculo.Titulo</MudLink>
+                                @if (vinculo.Estado is { } estado)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="@(estado switch { EstadoPullRequest.Mergeado => Color.Secondary, EstadoPullRequest.Fechado => Color.Default, _ => Color.Success })">
+                                        @(estado switch { EstadoPullRequest.Mergeado => "mergeado", EstadoPullRequest.Fechado => "fechado", _ => "aberto" })
+                                    </MudChip>
+                                }
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@vinculo.Repositorio · @vinculo.Autor · @vinculo.AtualizadoEm.ToLocalTime().ToString("dd/MM HH:mm")</MudText>
+                            </div>
+                        }
+                    }
+                </MudTabPanel>
+                <MudTabPanel Text="Relações" Icon="@Icons.Material.Filled.Link">
+                    <div class="d-flex gap-2 mt-3">
+                        <MudSelect T="int" @bind-Value="_cartaoRelacionadoId" ToStringFunc="@(id => _outrosCartoes.FirstOrDefault(c => c.Id == id)?.Titulo)" Label="Cartão" Dense="true">
+                            @foreach (var outro in _outrosCartoes)
+                            {
+                                <MudSelectItem Value="@outro.Id">@outro.Titulo</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudSelect T="TipoRelacaoCartao" @bind-Value="_tipoRelacao" Label="Tipo" Dense="true">
+                            @foreach (var tipo in Enum.GetValues<TipoRelacaoCartao>())
+                            {
+                                <MudSelectItem Value="@tipo">@tipo</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AdicionarRelacao">Vincular</MudButton>
+                    </div>
+                    @foreach (var relacao in _relacoes)
+                    {
+                        <div class="d-flex align-center gap-2 mt-2">
+                            <MudText Typo="Typo.body2" Class="flex-grow-1">@relacao.Tipo: @relacao.CartaoDestino.Titulo</MudText>
+                            <MudTooltip Text="Remover relação">
+                                <MudIconButton Icon="@Icons.Material.Outlined.LinkOff" Size="Size.Small" OnClick="@(() => ExcluirRelacao(relacao))" />
+                            </MudTooltip>
+                        </div>
+                    }
+                </MudTabPanel>
+            </MudTabs>
+            </MudItem>
+            <MudItem xs="12" md="4" Style="min-width:0">
+                <MudPaper Outlined="true" Class="pa-4 d-flex flex-column gap-3">
+                    @foreach (var alerta in _alertas)
+                    {
+                        <MudAlert Severity="@(alerta.Severidade switch { SeveridadeAlerta.Critico => Severity.Error, SeveridadeAlerta.Aviso => Severity.Warning, _ => Severity.Info })"
+                                  Dense="true" ShowCloseIcon="true" CloseIconClicked="@(() => ResolverAlerta(alerta))">
+                            @alerta.Mensagem
+                            <MudText Typo="Typo.caption" Class="d-block mud-text-secondary">Alerta de automação · @alerta.CriadoEm.ToLocalTime().ToString("dd/MM HH:mm") · feche para resolver</MudText>
+                        </MudAlert>
+                    }
+                    @foreach (var sugestao in _sugestoes)
+                    {
+                        <MudPaper Outlined="true" Class="pa-3" Style="border-color: var(--mud-palette-info)">
+                            <MudText Typo="Typo.subtitle2"><MudIcon Icon="@Icons.Material.Filled.Lightbulb" Size="Size.Small" Color="Color.Info" /> Sugestão de automação</MudText>
+                            <MudText Typo="Typo.body2" Class="mt-1">@sugestao.Descricao</MudText>
+                            <div class="d-flex justify-end gap-2 mt-2">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => DecidirSugestao(sugestao, false))">Rejeitar</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => DecidirSugestao(sugestao, true))">Aprovar</MudButton>
+                            </div>
+                        </MudPaper>
+                    }
+                    @{ var fixosFaltando = RegrasEtapa.FixosFaltando(_cartao, _cartao.Lista); }
+                    @if (fixosFaltando != CamposFixosCartao.Nenhum)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true">
+                            Esta etapa exige: @string.Join(", ", RegrasEtapa.Separar(fixosFaltando).Select(RegrasEtapa.Nome)). Use "Editar" para preencher.
+                        </MudAlert>
+                    }
+                    <MudSelect T="int" Value="_cartao.ListaId" ValueChanged="MudarLista" ToStringFunc="@(id => NomeLista(id))" Label="Lista" Dense="true" Variant="Variant.Outlined">
+                        @foreach (var lista in ListasQuadro.FolhasEmOrdem(_listas))
+                        {
+                            <MudSelectItem Value="@lista.Id">@ListasQuadro.NomeCompleto(lista, _listas)</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Sistema</MudText>
+                        <MudText>@(_cartao.Sistema?.Nome ?? "—")</MudText>
+                    </div>
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Desenvolvedores</MudText>
+                        @if (_cartao.Desenvolvedores.Count == 0)
+                        {
+                            <MudText>—</MudText>
+                        }
+                        @foreach (var dev in _cartao.Desenvolvedores.OrderByDescending(d => d.Principal))
+                        {
+                            <MudText>@dev.Usuario.Nome@(dev.Principal && _cartao.Desenvolvedores.Count > 1 ? " (principal)" : "")</MudText>
+                        }
+                    </div>
+                    <div>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Solicitante</MudText>
+                        <MudText>@(_cartao.Solicitante?.Nome ?? "—")</MudText>
+                    </div>
+                    <div class="d-flex gap-6">
+                        <div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Prioridade</MudText>
+                            <MudText>@(_cartao.Prioridade?.ToString() ?? "—")</MudText>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Prazo</MudText>
+                            <MudText>@(_cartao.Prazo?.ToLocalTime().ToString("dd/MM/yyyy") ?? "—")</MudText>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-6">
+                        <div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Início</MudText>
+                            <MudText>@(_cartao.DataInicio?.ToLocalTime().ToString("dd/MM/yyyy") ?? "—")</MudText>
+                        </div>
+                        <div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Estimativa</MudText>
+                            <MudText>@(_cartao.Estimativa?.ToString("0.##") ?? "—")</MudText>
+                        </div>
+                    </div>
+                    @if (_cartao.Etiquetas.Count > 0)
+                    {
+                        <div>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">Etiquetas</MudText>
+                            <div class="d-flex flex-wrap gap-1 mt-1">
+                                @foreach (var etiqueta in _cartao.Etiquetas.Select(e => e.Etiqueta))
+                                {
+                                    <span class="kanban-etiqueta" style="@($"background:{etiqueta.Cor}")">@etiqueta.Nome</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </MudPaper>
+            </MudItem>
+            </MudGrid>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Fechar">Fechar</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public int CartaoId { get; set; }
+
+    private Cartao? _cartao;
+    private List<DefinicaoCampo> _campos = [];
+    private readonly Dictionary<int, string?> _valores = [];
+    private string? _descricao;
+    private string? _novaTarefa;
+    private string? _novoComentario;
+    private bool _comentarioPublico;
+
+    // A conversa com o solicitante pode ser desligada em Parametrização › Portal › "O que o solicitante vê".
+    private bool ConversaNoPortal => ConfiguracaoPortal.LerCampos(Configuracao["Portal:CamposVisiveis"]).HasFlag(CamposPortal.Comentarios);
+    private List<Cartao> _outrosCartoes = [];
+    private List<RelacaoCartao> _relacoes = [];
+    private int _cartaoRelacionadoId;
+    private TipoRelacaoCartao _tipoRelacao = TipoRelacaoCartao.RelacionadoA;
+    private List<Reuniao> _reunioes = [];
+    private List<Usuario> _usuarios = [];
+    private DateTime? _dataReuniao = DateTime.Today;
+    private string? _ata;
+    private HashSet<int> _participantes = [];
+    private string? _emailPara;
+    private string _emailAssunto = string.Empty;
+    private string _emailCorpo = string.Empty;
+    private readonly HashSet<int> _itensExpandidos = [];
+    private readonly Dictionary<int, string?> _itemDescricoes = [];
+    private readonly Dictionary<int, List<Comentario>> _itemComentarios = [];
+    private readonly Dictionary<int, List<Reuniao>> _itemReunioes = [];
+    private readonly Dictionary<int, string?> _itemNovoComentario = [];
+    private readonly Dictionary<int, DateTime?> _itemDataReuniao = [];
+    private readonly Dictionary<int, string?> _itemAta = [];
+    private int? _comentarioEditandoId;
+    private string _comentarioEditandoTexto = string.Empty;
+    private List<HistoricoAtividade> _movimentacoes = [];
+    private List<AlertaCartao> _alertas = [];
+    private List<VinculoGit> _vinculosGit = [];
+    private int _limiteLinhaDoTempo = 25;
+    private int _limiteComentarios = 25;
+    private int ItensPorPagina => Math.Max(5, Configuracao.GetValue("Paginacao:ItensPorPagina", 25));
+    private List<SugestaoAutomacao> _sugestoes = [];
+    private List<ExecucaoAutomacao> _execucoesAutomacao = [];
+    private List<Lista> _listas = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _limiteLinhaDoTempo = _limiteComentarios = ItensPorPagina;
+        await CarregarAsync();
+        PrepararRascunhoEmail();
+    }
+
+    private async Task CarregarAsync()
+    {
+        _cartao = await Db.Cartoes
+            .AsSplitQuery()
+            .Include(c => c.Lista)
+            .Include(c => c.Sistema)
+            .Include(c => c.Solicitante)
+            .Include(c => c.Desenvolvedores).ThenInclude(d => d.Usuario)
+            .Include(c => c.Etiquetas).ThenInclude(e => e.Etiqueta)
+            .Include(c => c.ItensTarefa)
+            .ThenInclude(t => t.Desenvolvedor)
+            .Include(c => c.Comentarios).ThenInclude(c => c.Autor)
+            .Include(c => c.Anexos)
+            .Include(c => c.Reunioes)
+            .Include(c => c.Emails)
+            .FirstOrDefaultAsync(c => c.Id == CartaoId && !c.Excluido);
+        _descricao = _cartao?.Descricao;
+        if (_cartao is null) return;
+        _usuarios = await Db.Usuarios.Where(u => u.Ativo).OrderBy(u => u.Nome).ToListAsync();
+        _reunioes = _cartao.Reunioes.ToList();
+        _listas = await Db.Listas
+            .Where(l => l.QuadroId == _cartao.Lista.QuadroId && !l.Excluido)
+            .OrderBy(l => l.ListaPaiId).ThenBy(l => l.Ordem)
+            .ToListAsync();
+
+        _outrosCartoes = await Db.Cartoes
+            .Where(c => c.Id != CartaoId && c.Lista.QuadroId == _cartao.Lista.QuadroId)
+            .OrderBy(c => c.Titulo)
+            .ToListAsync();
+        _relacoes = await Db.RelacoesCartao
+            .Include(r => r.CartaoDestino)
+            .Where(r => r.CartaoOrigemId == CartaoId)
+            .ToListAsync();
+
+        await CarregarDadosDaListaAsync();
+    }
+
+    private async Task CarregarDadosDaListaAsync()
+    {
+        if (_cartao is null) return;
+        _vinculosGit = await Db.VinculosGit.AsNoTracking().Where(v => v.CartaoId == CartaoId).ToListAsync();
+        _alertas = await Db.AlertasCartao.AsNoTracking().Where(a => a.CartaoId == CartaoId && !a.Resolvido)
+            .OrderByDescending(a => a.Severidade).ThenByDescending(a => a.CriadoEm).ToListAsync();
+        _sugestoes = await Db.SugestoesAutomacao.AsNoTracking().Where(s => s.CartaoId == CartaoId && s.Status == StatusSugestao.Pendente)
+            .OrderByDescending(s => s.CriadoEm).ToListAsync();
+        _execucoesAutomacao = await Db.ExecucoesAutomacao.AsNoTracking().Include(e => e.RegraAutomacao)
+            .Where(e => e.CartaoId == CartaoId).OrderByDescending(e => e.Id).Take(100).ToListAsync();
+        _movimentacoes = await Db.HistoricoAtividades.AsNoTracking()
+            .Include(h => h.ListaOrigem).Include(h => h.ListaDestino)
+            .Where(h => h.CartaoId == CartaoId && (h.Tipo == TipoHistoricoAtividade.CartaoMovido || h.Tipo == TipoHistoricoAtividade.CartaoCriado))
+            .ToListAsync();
+
+        _campos = await Db.DefinicoesCampo.AsNoTracking()
+            .Where(c => c.ListaId == _cartao.ListaId && !c.Excluido)
+            .OrderBy(c => c.Ordem)
+            .ToListAsync();
+
+        var valores = await Db.ValoresCampoCartao.AsNoTracking()
+            .Where(v => v.CartaoId == CartaoId)
+            .OrderByDescending(v => v.NumeroEntradaNaLista).ThenByDescending(v => v.DataPreenchimento)
+            .ToListAsync();
+        _valores.Clear();
+        foreach (var valor in valores)
+            _valores.TryAdd(valor.DefinicaoCampoId, valor.Valor);
+    }
+
+    private async Task MudarLista(int listaId)
+    {
+        if (_cartao is null || listaId == _cartao.ListaId) return;
+        await Assistente.MoverAsync(CartaoId, listaId, null);
+        await RecarregarAsync();
+    }
+
+    // O movimento e o preenchimento da etapa gravam por outro DbContext; descarta o que está em memória e relê.
+    private async Task RecarregarAsync()
+    {
+        Db.ChangeTracker.Clear();
+        await CarregarAsync();
+    }
+
+    private async Task SalvarDescricao()
+    {
+        var cartao = await Db.Cartoes.FirstOrDefaultAsync(c => c.Id == CartaoId);
+        if (cartao is null) return;
+        cartao.Descricao = _descricao?.Trim();
+        await Db.SaveChangesAsync();
+        AtualizarCartao(cartao);
+        Snackbar.Add("Descrição atualizada.", Severity.Success);
+    }
+
+    private bool _salvandoTarefa;
+
+    /// <summary>
+    /// O cartão é carregado com rastreamento: ao salvar uma entidade filha, o EF já a coloca na coleção do cartão.
+    /// Adicionar de novo duplicava tarefas, comentários e anexos na tela.
+    /// </summary>
+    private static void IncluirUmaVez<T>(ICollection<T> colecao, T item)
+    {
+        if (!colecao.Contains(item)) colecao.Add(item);
+    }
+
+    private async Task AdicionarTarefa()
+    {
+        if (string.IsNullOrWhiteSpace(_novaTarefa) || _cartao is null || _salvandoTarefa) return;
+        _salvandoTarefa = true;
+        try
+        {
+            await CriarTarefaAsync();
+        }
+        finally
+        {
+            _salvandoTarefa = false;
+        }
+    }
+
+    private async Task CriarTarefaAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_novaTarefa) || _cartao is null) return;
+        var ordem = (_cartao.ItensTarefa.Select(t => (int?)t.Ordem).Max() ?? 0) + 1;
+        var tarefa = new ItemTarefa
+        {
+            CartaoId = CartaoId, Titulo = _novaTarefa.Trim(), Ordem = ordem,
+            CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.ItensTarefa.Add(tarefa);
+        await Db.SaveChangesAsync();
+        IncluirUmaVez(_cartao.ItensTarefa, tarefa);
+        _novaTarefa = null;
+    }
+
+    private async Task AlternarTarefa(ItemTarefa tarefa, bool concluido)
+    {
+        var entidade = await Db.ItensTarefa.FirstOrDefaultAsync(t => t.Id == tarefa.Id);
+        if (entidade is null) return;
+        entidade.Concluido = concluido;
+        await Db.SaveChangesAsync();
+        tarefa.Concluido = concluido;
+    }
+
+    private async Task PromoverTarefa(ItemTarefa tarefa)
+    {
+        if (_cartao is null || tarefa.CartaoPromovidoId.HasValue) return;
+        var ordem = (await Db.Cartoes.Where(c => c.ListaId == _cartao.ListaId && !c.Excluido).Select(c => (int?)c.Ordem).MaxAsync() ?? 0) + 1;
+        var filho = new Cartao
+        {
+            Titulo = tarefa.Titulo, Descricao = tarefa.Descricao, ListaId = _cartao.ListaId, Ordem = ordem,
+            CartaoPaiId = CartaoId, SistemaId = _cartao.SistemaId,
+            CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.Cartoes.Add(filho);
+        await Db.SaveChangesAsync();
+        if (tarefa.DesenvolvedorId.HasValue)
+            Db.CartaoDesenvolvedores.Add(new CartaoDesenvolvedor { CartaoId = filho.Id, UsuarioId = tarefa.DesenvolvedorId.Value, Principal = true });
+        var etiquetasPai = await Db.CartaoEtiquetas.Where(e => e.CartaoId == CartaoId).Select(e => e.EtiquetaId).ToListAsync();
+        Db.CartaoEtiquetas.AddRange(etiquetasPai.Select(id => new CartaoEtiqueta { CartaoId = filho.Id, EtiquetaId = id }));
+        Db.HistoricoAtividades.Add(new HistoricoAtividade
+        {
+            CartaoId = filho.Id, Tipo = TipoHistoricoAtividade.CartaoCriado, ListaDestinoId = _cartao.ListaId,
+            Descricao = $"Cartão criado a partir da promoção do item '{tarefa.Titulo}'.",
+            UsuarioId = UsuarioProvider.ObterIdUsuarioAtual(), OcorridoEm = DateTime.UtcNow
+        });
+
+        // Se o item já estava em modo detalhado, seus comentários e reuniões migram para o cartão filho.
+        var comentariosItem = await Db.Comentarios.Where(c => c.ItemTarefaId == tarefa.Id).ToListAsync();
+        foreach (var comentario in comentariosItem) { comentario.ItemTarefaId = null; comentario.CartaoId = filho.Id; }
+        var reunioesItem = await Db.Reunioes.Where(r => r.ItemTarefaId == tarefa.Id).ToListAsync();
+        foreach (var reuniao in reunioesItem) { reuniao.ItemTarefaId = null; reuniao.CartaoId = filho.Id; }
+
+        tarefa.CartaoPromovidoId = filho.Id;
+        // O item passa a refletir o status do cartão filho (sincronizado ao mover o filho).
+        tarefa.Concluido = ListasQuadro.EhConcluido(filho.ListaId, _listas);
+        await Db.SaveChangesAsync();
+        Snackbar.Add("Tarefa promovida a cartão filho.", Severity.Success);
+    }
+
+    private async Task AlternarExpandido(ItemTarefa tarefa)
+    {
+        if (!_itensExpandidos.Add(tarefa.Id))
+        {
+            _itensExpandidos.Remove(tarefa.Id);
+            return;
+        }
+        _itemDescricoes[tarefa.Id] = tarefa.Descricao;
+        _itemComentarios[tarefa.Id] = await Db.Comentarios.Include(c => c.Autor).Where(c => c.ItemTarefaId == tarefa.Id).OrderBy(c => c.DataHora).ToListAsync();
+        _itemReunioes[tarefa.Id] = await Db.Reunioes.Where(r => r.ItemTarefaId == tarefa.Id).OrderByDescending(r => r.Data).ToListAsync();
+        _itemDataReuniao.TryAdd(tarefa.Id, DateTime.Today);
+    }
+
+    private async Task SalvarDescricaoItem(ItemTarefa tarefa)
+    {
+        var entidade = await Db.ItensTarefa.FirstOrDefaultAsync(t => t.Id == tarefa.Id);
+        if (entidade is null) return;
+        entidade.Descricao = _itemDescricoes.GetValueOrDefault(tarefa.Id)?.Trim();
+        await Db.SaveChangesAsync();
+        tarefa.Descricao = entidade.Descricao;
+        Snackbar.Add("Descrição do item salva.", Severity.Success);
+    }
+
+    private async Task AdicionarComentarioItem(ItemTarefa tarefa)
+    {
+        var texto = _itemNovoComentario.GetValueOrDefault(tarefa.Id);
+        if (string.IsNullOrWhiteSpace(texto)) return;
+        var comentario = new Comentario
+        {
+            ItemTarefaId = tarefa.Id, Texto = texto.Trim(), AutorId = UsuarioProvider.ObterIdUsuarioAtual(),
+            DataHora = DateTime.UtcNow, CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.Comentarios.Add(comentario);
+        await Db.SaveChangesAsync();
+        comentario.Autor = UsuarioProvider.ObterUsuarioAtual();
+        if (!_itemComentarios.TryGetValue(tarefa.Id, out var lista)) { lista = []; _itemComentarios[tarefa.Id] = lista; }
+        IncluirUmaVez(lista, comentario);
+        _itemNovoComentario[tarefa.Id] = null;
+    }
+
+    private async Task RegistrarReuniaoItem(ItemTarefa tarefa)
+    {
+        var ata = _itemAta.GetValueOrDefault(tarefa.Id);
+        var data = _itemDataReuniao.GetValueOrDefault(tarefa.Id) ?? DateTime.Today;
+        if (string.IsNullOrWhiteSpace(ata)) return;
+        var reuniao = new Reuniao
+        {
+            ItemTarefaId = tarefa.Id, Data = data.ToUniversalTime(), Ata = ata.Trim(),
+            AutorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.Reunioes.Add(reuniao);
+        await Db.SaveChangesAsync();
+        if (!_itemReunioes.TryGetValue(tarefa.Id, out var lista)) { lista = []; _itemReunioes[tarefa.Id] = lista; }
+        if (!lista.Contains(reuniao)) lista.Insert(0, reuniao);
+        _itemAta[tarefa.Id] = null;
+    }
+
+    private async Task AbrirCartaoPromovido(int cartaoId)
+        => await Dialog.ShowAsync<DialogDetalhesCartao>("Detalhes do cartão", new DialogParameters<DialogDetalhesCartao> { { x => x.CartaoId, cartaoId } }, new DialogOptions { FullScreen = true, CloseButton = true });
+
+    private async Task AdicionarComentario()
+    {
+        if (string.IsNullOrWhiteSpace(_novoComentario) || _cartao is null) return;
+        var comentario = new Comentario
+        {
+            CartaoId = CartaoId, Texto = _novoComentario.Trim(), AutorId = UsuarioProvider.ObterIdUsuarioAtual(), Publico = _comentarioPublico,
+            DataHora = DateTime.UtcNow, CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.Comentarios.Add(comentario);
+        await Db.SaveChangesAsync();
+        await NotificarMencoesAsync(_novoComentario.Trim(), TipoNotificacao.MencaoComentario);
+        if (comentario.Publico) await NotificadorSolicitante.AoResponderAsync(CartaoId, comentario.AutorId, comentario.Texto);
+        _comentarioPublico = false;
+        comentario.Autor = UsuarioProvider.ObterUsuarioAtual();
+        IncluirUmaVez(_cartao.Comentarios, comentario);
+        _novoComentario = null;
+    }
+
+    private async Task NotificarMencoesAsync(string texto, TipoNotificacao tipo)
+    {
+        if (_cartao is null) return;
+        var mencionados = _usuarios.Where(u => texto.Contains($"@{u.Nome}", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (mencionados.Count == 0) return;
+        Db.Notificacoes.AddRange(mencionados.Select(usuario => new Notificacao
+        {
+            DestinatarioId = usuario.Id, CartaoOrigemId = CartaoId,
+            Tipo = tipo,
+            Mensagem = $"Você foi mencionado no cartão '{_cartao.Titulo}'.",
+            CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        }));
+        await Db.SaveChangesAsync();
+
+        foreach (var usuario in mencionados.Where(u => u.NotificarPorEmail && !string.IsNullOrWhiteSpace(u.Email)))
+        {
+            try
+            {
+                var corpo = System.Net.WebUtility.HtmlEncode(texto).Replace("\n", "<br>", StringComparison.Ordinal);
+                await EmailSender.EnviarAsync(usuario.Email, null, $"Você foi mencionado em '{_cartao.Titulo}'", corpo);
+            }
+            catch (Exception)
+            {
+                // A notificação in-app já foi registrada; falha no envio de e-mail não deve interromper o fluxo.
+            }
+        }
+    }
+
+    private sealed record ItemLinhaDoTempo(DateTime Quando, string Icone, Color Cor, string Titulo, string? Detalhe);
+
+    private List<ItemLinhaDoTempo> MontarLinhaDoTempo()
+    {
+        if (_cartao is null) return [];
+        var itens = new List<ItemLinhaDoTempo>();
+        itens.AddRange(_cartao.Comentarios.Select(c => new ItemLinhaDoTempo(
+            c.DataHora, Icons.Material.Filled.Comment, Color.Default,
+            $"Comentário de {c.Autor.Nome}", c.Texto + (c.Editado ? " (editado)" : ""))));
+        itens.AddRange(_reunioes.Select(r => new ItemLinhaDoTempo(
+            r.Data, Icons.Material.Filled.Groups, Color.Info, "Reunião registrada", r.Ata)));
+        itens.AddRange(_cartao.Emails.Select(e => new ItemLinhaDoTempo(
+            e.EnviadoEm, Icons.Material.Filled.Email, e.Enviado ? Color.Success : Color.Error,
+            $"E-mail para {e.Para}", e.Assunto)));
+        itens.AddRange(_movimentacoes.Select(m => new ItemLinhaDoTempo(
+            m.OcorridoEm, Icons.Material.Filled.SwapHoriz, Color.Default,
+            m.Tipo == TipoHistoricoAtividade.CartaoCriado ? $"Cartão criado em \"{m.ListaDestino?.Nome}\"" : $"Movido para \"{m.ListaDestino?.Nome}\"",
+            m.Tipo == TipoHistoricoAtividade.CartaoMovido ? $"De \"{m.ListaOrigem?.Nome}\"" : null)));
+        itens.AddRange(_vinculosGit.Where(v => v.Tipo == TipoVinculoGit.PullRequest).Select(v => new ItemLinhaDoTempo(
+            v.AtualizadoEm, Icons.Material.Filled.MergeType, v.Estado == EstadoPullRequest.Mergeado ? Color.Secondary : Color.Default,
+            $"Pull request {(v.Estado switch { EstadoPullRequest.Mergeado => "mergeado", EstadoPullRequest.Fechado => "fechado", _ => "aberto" })}", $"{v.Titulo} ({v.Repositorio})")));
+        itens.AddRange(_execucoesAutomacao.Select(e => new ItemLinhaDoTempo(
+            e.OcorridoEm, Icons.Material.Filled.AutoMode,
+            e.Status switch { StatusExecucaoAutomacao.Erro => Color.Error, StatusExecucaoAutomacao.Parcial => Color.Warning, StatusExecucaoAutomacao.Desfeita => Color.Default, _ => Color.Secondary },
+            $"Automação \"{e.RegraAutomacao.Nome}\"{(e.Status == StatusExecucaoAutomacao.Desfeita ? " (desfeita)" : "")}",
+            e.Resumo + (string.IsNullOrWhiteSpace(e.Erro) ? "" : $" — erro: {e.Erro}"))));
+        return itens.OrderByDescending(i => i.Quando).ToList();
+    }
+
+    // ---------- Exclusões (lógicas: o registro fica no banco marcado como excluído) ----------
+
+    private async Task<bool> ConfirmarExclusaoAsync(string titulo, string mensagem)
+        => await Dialog.ShowMessageBox(titulo, mensagem, yesText: "Excluir", cancelText: "Cancelar") == true;
+
+    /// <summary>Marca como excluído relendo pelo id (a instância da tela pode estar desanexada após um recarregamento).</summary>
+    private async Task<bool> MarcarExcluidoAsync<T>(int id) where T : EntidadeBase
+    {
+        var entidade = await Db.Set<T>().FirstOrDefaultAsync(e => e.Id == id);
+        if (entidade is null) return false;
+        entidade.Excluido = true;
+        entidade.ExcluidoEm = DateTime.UtcNow;
+        entidade.ExcluidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        return true;
+    }
+
+    private async Task ExcluirTarefa(ItemTarefa tarefa)
+    {
+        if (_cartao is null) return;
+        var aviso = tarefa.CartaoPromovidoId.HasValue ? " O cartão filho criado a partir dela continua no quadro." : "";
+        if (!await ConfirmarExclusaoAsync("Excluir tarefa", $"Excluir a tarefa \"{tarefa.Titulo}\" com seus comentários e reuniões?{aviso}")) return;
+        if (!await MarcarExcluidoAsync<ItemTarefa>(tarefa.Id)) return;
+        foreach (var id in await Db.Comentarios.Where(c => c.ItemTarefaId == tarefa.Id).Select(c => c.Id).ToListAsync())
+            await MarcarExcluidoAsync<Comentario>(id);
+        foreach (var id in await Db.Reunioes.Where(r => r.ItemTarefaId == tarefa.Id).Select(r => r.Id).ToListAsync())
+            await MarcarExcluidoAsync<Reuniao>(id);
+        await Db.SaveChangesAsync();
+        _cartao.ItensTarefa.Remove(tarefa);
+        _itensExpandidos.Remove(tarefa.Id);
+        Snackbar.Add("Tarefa excluída.", Severity.Success);
+    }
+
+    private async Task ExcluirComentario(Comentario comentario)
+    {
+        if (_cartao is null || !await ConfirmarExclusaoAsync("Excluir comentário", "Excluir este comentário?")) return;
+        if (!await MarcarExcluidoAsync<Comentario>(comentario.Id)) return;
+        await Db.SaveChangesAsync();
+        _cartao.Comentarios.Remove(comentario);
+    }
+
+    private async Task ExcluirComentarioItem(ItemTarefa tarefa, Comentario comentario)
+    {
+        if (!await ConfirmarExclusaoAsync("Excluir comentário", "Excluir este comentário do item?")) return;
+        if (!await MarcarExcluidoAsync<Comentario>(comentario.Id)) return;
+        await Db.SaveChangesAsync();
+        _itemComentarios.GetValueOrDefault(tarefa.Id)?.Remove(comentario);
+    }
+
+    private async Task ExcluirReuniao(Reuniao reuniao)
+    {
+        if (_cartao is null || !await ConfirmarExclusaoAsync("Excluir reunião", $"Excluir a reunião de {reuniao.Data.ToLocalTime():dd/MM/yyyy}?")) return;
+        if (!await MarcarExcluidoAsync<Reuniao>(reuniao.Id)) return;
+        await Db.SaveChangesAsync();
+        _reunioes.Remove(reuniao);
+        _cartao.Reunioes.Remove(reuniao);
+    }
+
+    private async Task ExcluirReuniaoItem(ItemTarefa tarefa, Reuniao reuniao)
+    {
+        if (!await ConfirmarExclusaoAsync("Excluir reunião", $"Excluir a reunião de {reuniao.Data.ToLocalTime():dd/MM/yyyy} do item?")) return;
+        if (!await MarcarExcluidoAsync<Reuniao>(reuniao.Id)) return;
+        await Db.SaveChangesAsync();
+        _itemReunioes.GetValueOrDefault(tarefa.Id)?.Remove(reuniao);
+    }
+
+    private async Task ExcluirAnexo(Anexo anexo)
+    {
+        if (_cartao is null || !await ConfirmarExclusaoAsync("Excluir anexo", $"Excluir o anexo \"{anexo.NomeOriginal}\"?")) return;
+        if (!await MarcarExcluidoAsync<Anexo>(anexo.Id)) return;
+        await Db.SaveChangesAsync();
+        _cartao.Anexos.Remove(anexo);
+        Snackbar.Add("Anexo excluído.", Severity.Success);
+    }
+
+    private async Task ExcluirRelacao(RelacaoCartao relacao)
+    {
+        if (!await ConfirmarExclusaoAsync("Remover relação", $"Remover a relação \"{relacao.Tipo}: {relacao.CartaoDestino.Titulo}\"?")) return;
+        if (!await MarcarExcluidoAsync<RelacaoCartao>(relacao.Id)) return;
+        await Db.SaveChangesAsync();
+        _relacoes.Remove(relacao);
+    }
+
+    private void IniciarEdicaoComentario(Comentario comentario)
+    {
+        _comentarioEditandoId = comentario.Id;
+        _comentarioEditandoTexto = comentario.Texto;
+    }
+
+    private async Task SalvarEdicaoComentario(Comentario comentario)
+    {
+        if (string.IsNullOrWhiteSpace(_comentarioEditandoTexto)) return;
+        var entidade = await Db.Comentarios.FirstOrDefaultAsync(c => c.Id == comentario.Id);
+        if (entidade is null) return;
+        entidade.Texto = _comentarioEditandoTexto.Trim();
+        entidade.Editado = true;
+        await Db.SaveChangesAsync();
+        comentario.Texto = entidade.Texto;
+        comentario.Editado = true;
+        _comentarioEditandoId = null;
+    }
+
+    private string? ObterValor(int campoId) => _valores.GetValueOrDefault(campoId);
+
+    private void DefinirValor(int campoId, string? valor) => _valores[campoId] = valor;
+
+    private async Task SalvarCampos()
+    {
+        if (_cartao is null) return;
+        var manuais = _campos.Where(RegrasEtapa.EhManual).ToDictionary(c => c.Id, c => ObterValor(c.Id));
+        await ValoresCampo.SalvarValoresAsync(CartaoId, _cartao.ListaId, manuais);
+        await CarregarDadosDaListaAsync();
+        Snackbar.Add("Campos salvos.", Severity.Success);
+    }
+
+    private void AtualizarCartao(Cartao cartao)
+    {
+        if (_cartao is not null) _cartao.Descricao = cartao.Descricao;
+    }
+
+    private async Task AdicionarAnexo(InputFileChangeEventArgs args)
+    {
+        if (_cartao is null) return;
+        var arquivo = args.File;
+
+        var config = Configuracao.GetSection("Anexos");
+        var extensoesPermitidas = (config["ExtensoesPermitidas"] ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var limiteMbArquivo = int.TryParse(config["TamanhoMaximoMbPorArquivo"], out var mbArquivo) ? mbArquivo : 20;
+        var limiteMbTotal = int.TryParse(config["TamanhoMaximoMbTotal"], out var mbTotal) ? mbTotal : 100;
+        var limite = limiteMbArquivo * 1024L * 1024L;
+
+        var extensao = Path.GetExtension(arquivo.Name);
+        if (extensoesPermitidas.Count > 0 && !extensoesPermitidas.Contains(extensao))
+        {
+            Snackbar.Add($"Extensão '{extensao}' não permitida. Extensões aceitas: {string.Join(", ", extensoesPermitidas)}.", Severity.Warning);
+            return;
+        }
+        if (arquivo.Size > limite)
+        {
+            Snackbar.Add($"O arquivo excede o limite de {limiteMbArquivo} MB.", Severity.Warning);
+            return;
+        }
+        var totalAtual = _cartao.Anexos.Sum(a => a.TamanhoBytes);
+        if (totalAtual + arquivo.Size > limiteMbTotal * 1024L * 1024L)
+        {
+            Snackbar.Add($"O total de anexos do cartão excederia o limite de {limiteMbTotal} MB.", Severity.Warning);
+            return;
+        }
+
+        // Anexos:EstrategiaNome — Guid (padrão), Original (nome enviado) ou CartaoOriginal (id do cartão + nome enviado).
+        var nomeDesejado = (config["EstrategiaNome"] ?? "Guid").ToLowerInvariant() switch
+        {
+            "original" => arquivo.Name,
+            "cartaooriginal" => $"{CartaoId}_{arquivo.Name}",
+            _ => $"{Guid.NewGuid():N}{extensao}"
+        };
+        ArquivoArmazenado armazenado;
+        try
+        {
+            await using var stream = arquivo.OpenReadStream(limite);
+            armazenado = await AnexoStorage.SalvarAsync(stream, nomeDesejado, arquivo.ContentType);
+        }
+        catch (IOException ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+            return;
+        }
+        var anexo = new Anexo
+        {
+            CartaoId = CartaoId, NomeOriginal = arquivo.Name, NomeArmazenado = Path.GetFileName(armazenado.Caminho),
+            Caminho = armazenado.Caminho, ContentType = arquivo.ContentType, TamanhoBytes = arquivo.Size,
+            Comprimido = armazenado.Comprimido, TamanhoArmazenadoBytes = armazenado.TamanhoArmazenado,
+            EnviadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.Anexos.Add(anexo);
+        await Db.SaveChangesAsync();
+        IncluirUmaVez(_cartao.Anexos, anexo);
+        Snackbar.Add("Anexo enviado.", Severity.Success);
+    }
+
+    private async Task AdicionarRelacao()
+    {
+        if (_cartao is null || _cartaoRelacionadoId == 0 || _cartaoRelacionadoId == CartaoId) return;
+        if (await Db.RelacoesCartao.AnyAsync(r => r.CartaoOrigemId == CartaoId && r.CartaoDestinoId == _cartaoRelacionadoId && r.Tipo == _tipoRelacao)) return;
+        var usuarioId = UsuarioProvider.ObterIdUsuarioAtual();
+        var relacao = new RelacaoCartao
+        {
+            CartaoOrigemId = CartaoId, CartaoDestinoId = _cartaoRelacionadoId, Tipo = _tipoRelacao,
+            CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+        };
+        Db.RelacoesCartao.Add(relacao);
+
+        // "BloqueadoPor" gravado a partir deste cartão (origem) significa que ESTE cartão fica bloqueado
+        // pelo destino; "Bloqueia" significa que quem fica bloqueado é o cartão destino.
+        if (_tipoRelacao is TipoRelacaoCartao.BloqueadoPor or TipoRelacaoCartao.Bloqueia)
+        {
+            var cartaoBloqueadoId = _tipoRelacao == TipoRelacaoCartao.BloqueadoPor ? CartaoId : _cartaoRelacionadoId;
+            var destinatarios = await Db.CartaoDesenvolvedores.Where(d => d.CartaoId == cartaoBloqueadoId).Select(d => d.UsuarioId).ToListAsync();
+            var tituloBloqueado = _tipoRelacao == TipoRelacaoCartao.BloqueadoPor ? _cartao.Titulo : _outrosCartoes.First(c => c.Id == _cartaoRelacionadoId).Titulo;
+            Db.Notificacoes.AddRange(destinatarios.Where(id => id != usuarioId).Select(destinatario => new Notificacao
+            {
+                DestinatarioId = destinatario, CartaoOrigemId = cartaoBloqueadoId, Tipo = TipoNotificacao.BloqueioCartao,
+                Mensagem = $"O cartão '{tituloBloqueado}' está bloqueado por outro cartão ainda não concluído.",
+                CriadoPorId = usuarioId, CriadoEm = DateTime.UtcNow
+            }));
+        }
+
+        await Db.SaveChangesAsync();
+        relacao.CartaoDestino = _outrosCartoes.First(c => c.Id == _cartaoRelacionadoId);
+        _relacoes.Add(relacao);
+    }
+
+    private void SelecionarParticipantes(IEnumerable<int> valores) => _participantes = valores.ToHashSet();
+
+    private async Task RegistrarReuniao()
+    {
+        if (_cartao is null || !_dataReuniao.HasValue || string.IsNullOrWhiteSpace(_ata)) return;
+        var reuniao = new Reuniao
+        {
+            CartaoId = CartaoId, Data = _dataReuniao.Value.ToUniversalTime(), Ata = _ata.Trim(),
+            AutorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        Db.Reunioes.Add(reuniao);
+        await Db.SaveChangesAsync();
+        Db.ReuniaoParticipantes.AddRange(_participantes.Select(id => new ReuniaoParticipante { ReuniaoId = reuniao.Id, UsuarioId = id }));
+        await Db.SaveChangesAsync();
+        await NotificarMencoesAsync(reuniao.Ata, TipoNotificacao.MencaoReuniao);
+        IncluirUmaVez(_cartao.Reunioes, reuniao);
+        IncluirUmaVez(_reunioes, reuniao);
+        _ata = null;
+        _participantes = [];
+        Snackbar.Add("Reunião registrada.", Severity.Success);
+    }
+
+    private async Task EnviarEmail()
+    {
+        if (_cartao is null || string.IsNullOrWhiteSpace(_emailPara)) return;
+        var email = new EmailCartao
+        {
+            CartaoId = CartaoId, Para = _emailPara.Trim(), Assunto = AssuntoEmailFinal,
+            CorpoHtml = MontarCorpoEmailHtml(), EnviadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), EnviadoEm = DateTime.UtcNow,
+            CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow
+        };
+        try
+        {
+            await EmailSender.EnviarAsync(email.Para, email.Cc, email.Assunto, email.CorpoHtml);
+            email.Enviado = true;
+            Snackbar.Add("E-mail enviado.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            email.ErroEnvio = ex.Message;
+            Snackbar.Add("Não foi possível enviar o e-mail.", Severity.Error);
+        }
+        Db.EmailsCartao.Add(email);
+        if (email.Enviado)
+        {
+            Db.HistoricoAtividades.Add(new HistoricoAtividade
+            {
+                CartaoId = CartaoId, Tipo = TipoHistoricoAtividade.EmailEnviado,
+                Descricao = $"E-mail enviado para {email.Para}.", UsuarioId = UsuarioProvider.ObterIdUsuarioAtual(), OcorridoEm = DateTime.UtcNow
+            });
+        }
+        await Db.SaveChangesAsync();
+        IncluirUmaVez(_cartao.Emails, email);
+        if (email.Enviado)
+        {
+            _emailPreVisualizando = false;
+            PrepararRascunhoEmail();
+        }
+    }
+
+    private void Fechar() => MudDialog.Close();
+
+    private async Task ResolverAlerta(AlertaCartao alerta)
+    {
+        var entidade = await Db.AlertasCartao.FirstOrDefaultAsync(a => a.Id == alerta.Id);
+        if (entidade is null || entidade.Resolvido) return;
+        entidade.Resolvido = true;
+        entidade.ResolvidoEm = DateTime.UtcNow;
+        entidade.ResolvidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        _alertas.Remove(alerta);
+        Snackbar.Add("Alerta resolvido.", Severity.Success);
+    }
+
+    private async Task DecidirSugestao(SugestaoAutomacao sugestao, bool aprovar)
+    {
+        try
+        {
+            if (aprovar) await Motor.AprovarSugestaoAsync(sugestao.Id, UsuarioProvider.ObterIdUsuarioAtual());
+            else await Motor.RejeitarSugestaoAsync(sugestao.Id, UsuarioProvider.ObterIdUsuarioAtual());
+            Snackbar.Add(aprovar ? "Sugestão aplicada." : "Sugestão rejeitada.", aprovar ? Severity.Success : Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Não foi possível aplicar: {ex.Message}", Severity.Error);
+        }
+        await RecarregarAsync();
+    }
+
+    private bool _emailPreVisualizando;
+
+    private List<(string Papel, Usuario Usuario)> SugestoesDestinatario
+    {
+        get
+        {
+            if (_cartao is null) return [];
+            var sugestoes = new List<(string, Usuario)>();
+            if (_cartao.Solicitante is { Email.Length: > 0 } solicitante) sugestoes.Add(("Solicitante", solicitante));
+            foreach (var dev in _cartao.Desenvolvedores.OrderByDescending(d => d.Principal).Where(d => !string.IsNullOrWhiteSpace(d.Usuario.Email)))
+                sugestoes.Add((dev.Principal ? "Dev. principal" : "Desenvolvedor", dev.Usuario));
+            return sugestoes;
+        }
+    }
+
+    private string AssuntoEmailFinal => string.IsNullOrWhiteSpace(_emailAssunto) ? _cartao?.Titulo ?? "" : SubstituirMarcadores(_emailAssunto.Trim(), html: false);
+
+    private string LinkCartao => _cartao is null ? "" : Nav.ToAbsoluteUri($"/quadros/{_cartao.Lista.QuadroId}?cartao={_cartao.Id}").ToString();
+
+    /// <summary>Destinatário padrão: solicitante; sem solicitante com e-mail, o desenvolvedor principal.</summary>
+    private void PrepararRascunhoEmail()
+    {
+        _emailPara = SugestoesDestinatario.FirstOrDefault().Usuario?.Email;
+        AplicarModeloEmail();
+    }
+
+    private void AplicarModeloEmail()
+    {
+        _emailAssunto = "Acompanhamento: {titulo}";
+        _emailCorpo = "Olá,\n\nGostaria de saber como está o andamento do cartão \"{titulo}\", atualmente em \"{lista}\" (prazo: {prazo}).\n\nPode me dar um retorno?\n\nAcesse o cartão: {link}\n\nObrigado!";
+    }
+
+    private void AdicionarDestinatario(string email)
+    {
+        var atuais = (_emailPara ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        if (atuais.Contains(email, StringComparer.OrdinalIgnoreCase)) return;
+        atuais.Add(email);
+        _emailPara = string.Join("; ", atuais);
+    }
+
+    private void PreVisualizarEmail()
+    {
+        var invalidos = (_emailPara ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(e => !System.Net.Mail.MailAddress.TryCreate(e, out _)).ToList();
+        if (invalidos.Count > 0)
+        {
+            Snackbar.Add($"E-mail inválido: {string.Join(", ", invalidos)}", Severity.Warning);
+            return;
+        }
+        _emailPreVisualizando = true;
+    }
+
+    // O texto digitado é sempre codificado; só os marcadores gerados pelo sistema (como o link) viram HTML.
+    private string MontarCorpoEmailHtml()
+        => SubstituirMarcadores(System.Net.WebUtility.HtmlEncode(_emailCorpo ?? "").Replace("\n", "<br>", StringComparison.Ordinal), html: true);
+
+    private string SubstituirMarcadores(string texto, bool html)
+    {
+        if (_cartao is null) return texto;
+        string Valor(string v) => html ? System.Net.WebUtility.HtmlEncode(v) : v;
+        var link = html
+            ? $"<a href=\"{System.Net.WebUtility.HtmlEncode(LinkCartao)}\">{System.Net.WebUtility.HtmlEncode(LinkCartao)}</a>"
+            : LinkCartao;
+        return texto
+            .Replace("{titulo}", Valor(_cartao.Titulo), StringComparison.OrdinalIgnoreCase)
+            .Replace("{prazo}", Valor(_cartao.Prazo?.ToLocalTime().ToString("dd/MM/yyyy") ?? "sem prazo"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{lista}", Valor(NomeLista(_cartao.ListaId) ?? _cartao.Lista.Nome), StringComparison.OrdinalIgnoreCase)
+            .Replace("{solicitante}", Valor(_cartao.Solicitante?.Nome ?? ""), StringComparison.OrdinalIgnoreCase)
+            .Replace("{link}", link, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string? NomeLista(int id)
+    {
+        var lista = _listas.FirstOrDefault(l => l.Id == id);
+        return lista is null ? null : ListasQuadro.NomeCompleto(lista, _listas);
+    }
+
+    private async Task Excluir()
+    {
+        if (_cartao is null) return;
+        var confirmado = await Dialog.ShowMessageBox("Excluir cartão",
+            $"Excluir o cartão '{_cartao.Titulo}'? Ele deixará de aparecer no quadro.",
+            yesText: "Excluir", cancelText: "Cancelar");
+        if (confirmado != true) return;
+        if (await Movimentacao.ExcluirAsync(CartaoId))
+        {
+            Snackbar.Add("Cartão excluído.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+    }
+}

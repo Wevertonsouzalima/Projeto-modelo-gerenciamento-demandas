@@ -1,0 +1,107 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@inject KanbanDbContext Db
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IDialogService Dialog
+@inject IUsuarioAtualProvider UsuarioProvider
+
+<PageTitle>Quadros</PageTitle>
+
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h5">Quadros</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="AbrirDialogNovoQuadro">
+        Novo Quadro
+    </MudButton>
+</div>
+
+@if (_quadros.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">
+        Nenhum quadro encontrado. Crie o primeiro!
+    </MudAlert>
+}
+else
+{
+    <MudGrid>
+        @foreach (var q in _quadros)
+        {
+            <MudItem xs="12" sm="6" md="4" lg="3">
+                <MudCard Style="@($"border-top: 4px solid {q.Cor}; cursor:pointer;")"
+                         Elevation="2"
+                         @onclick="@(() => Nav.NavigateTo($"/quadros/{q.Id}"))">
+                    <MudCardContent>
+                        <MudText Typo="Typo.h6">@q.Nome</MudText>
+                        @if (!string.IsNullOrWhiteSpace(q.Descricao))
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-1 mud-text-secondary">@q.Descricao</MudText>
+                        }
+                        <MudText Typo="Typo.caption" Class="mt-2 mud-text-secondary">
+                            Criado em @q.CriadoEm.ToLocalTime().ToString("dd/MM/yyyy")
+                        </MudText>
+                    </MudCardContent>
+                    <MudCardActions>
+                        <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                       Size="Size.Small" Color="Color.Primary"
+                                       OnClick="@(() => Nav.NavigateTo($"/quadros/{q.Id}"))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       OnClick="@(() => AbrirDialogEditarQuadro(q))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small" Color="Color.Error"
+                                       OnClick="@(() => ExcluirQuadro(q))" />
+                    </MudCardActions>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    List<Quadro> _quadros = [];
+
+    protected override async Task OnInitializedAsync()
+        => await CarregarQuadros();
+
+    async Task CarregarQuadros()
+        => _quadros = await Db.Quadros.OrderBy(q => q.Nome).ToListAsync();
+
+    async Task AbrirDialogNovoQuadro()
+    {
+        var dialog = await Dialog.ShowAsync<Shared.DialogNovoQuadro>("Novo Quadro");
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadros();
+    }
+
+    async Task AbrirDialogEditarQuadro(Quadro q)
+    {
+        var parametros = new DialogParameters<Shared.DialogNovoQuadro>
+        {
+            { x => x.QuadroExistente, q }
+        };
+        var dialog = await Dialog.ShowAsync<Shared.DialogNovoQuadro>("Editar Quadro", parametros);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) await CarregarQuadros();
+    }
+
+    async Task ExcluirQuadro(Quadro q)
+    {
+        var confirm = await Dialog.ShowMessageBox(
+            "Confirmar exclusão",
+            $"Excluir o quadro \"{q.Nome}\"? Todos os dados serão removidos (soft-delete).",
+            yesText: "Excluir", cancelText: "Cancelar");
+
+        if (confirm is not true) return;
+
+        var existente = await Db.Quadros.FindAsync(q.Id);
+        if (existente is null) return;
+        existente.Excluido = true;
+        existente.ExcluidoEm = DateTime.UtcNow;
+        existente.ExcluidoPorId = UsuarioProvider.ObterIdUsuarioAtual();
+        await Db.SaveChangesAsync();
+        await CarregarQuadros();
+        Snackbar.Add("Quadro removido.", Severity.Info);
+    }
+}
