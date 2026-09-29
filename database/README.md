@@ -1,51 +1,50 @@
-# Banco MySQL
+# Banco SQL Server
 
-O projeto usa MySQL 8.0 ou superior com o provider `Pomelo.EntityFrameworkCore.MySql`.
+O projeto usa SQL Server 2016 ou superior com o provider `Microsoft.EntityFrameworkCore.SqlServer`.
+Não há migrations: o banco é criado por um único script.
 
-## Configuracao
+## Criação do banco
 
-A connection string fica em `src/KanbanDemandas.Web/appsettings.json`:
+Execute `KanbanDemandas.SqlServer.sql` com um usuário que possa criar bancos:
+
+- SSMS: abra o arquivo e execute (F5).
+- Linha de comando: `sqlcmd -S <servidor> -E -b -i database/KanbanDemandas.SqlServer.sql`
+
+O script cria o banco `KanbanDemandas`, todas as tabelas (schema `dbo`), chaves e índices, e os dados
+iniciais (usuários, sistemas, quadro de exemplo). Tudo roda numa transação: se algo falhar, nada fica
+criado pela metade e o script pode ser executado de novo. Se as tabelas já existirem, ele para sem alterar nada.
+
+Configurações do banco aplicadas ao criá-lo:
+
+- Collation `Latin1_General_100_CI_AI`: comparações e buscas ignoram maiúsculas e acentos.
+- `READ_COMMITTED_SNAPSHOT ON`: leituras não esperam gravações em andamento (sem isso, telas abertas
+  ao mesmo tempo podem se bloquear).
+
+Se o banco for criado pelo DBA, o script usa o banco existente (vazio) e pula essa parte: peça essas
+duas configurações na criação.
+
+No fim do script há um bloco comentado para criar o login e o usuário da aplicação (`kanban`), com
+leitura e escrita. Descomente e troque a senha se precisar.
+
+## Configuração
+
+A connection string fica em `src/KanbanDemandas.Web/appsettings.json` e `src/KanbanDemandas.Portal/appsettings.json`:
 
 ```json
-"DefaultConnection": "Server=localhost;Port=3306;Database=KanbanDemandas;User=kanban;Password=change-me;"
+"DefaultConnection": "Server=localhost;Database=KanbanDemandas;User Id=kanban;Password=change-me;TrustServerCertificate=True;"
 ```
 
-Altere usuario e senha para o ambiente real. Nao versione credenciais reais.
+Com autenticação do Windows: `Server=localhost;Database=KanbanDemandas;Trusted_Connection=True;TrustServerCertificate=True;`.
+Não versione credenciais reais: em desenvolvimento use user-secrets (os dois projetos compartilham o `UserSecretsId`).
 
-## Criacao do banco
+## Alterações no modelo
 
-Com um usuario administrador do MySQL:
-
-```sql
-CREATE DATABASE KanbanDemandas CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
-CREATE USER 'kanban'@'localhost' IDENTIFIED BY 'uma-senha-segura';
-GRANT ALL PRIVILEGES ON KanbanDemandas.* TO 'kanban'@'localhost';
-FLUSH PRIVILEGES;
-```
-
-Depois, atualize a connection string e execute um dos scripts:
-
-- `scripts/KanbanDemandas.MySql.sql`: cria o schema completo para banco vazio.
-- `scripts/KanbanDemandas.MySql.idempotent.sql`: aplica apenas migrations ainda nao registradas em `__EFMigrationsHistory`.
-
-Exemplo:
+Ao mudar entidades ou configurações do EF, gere de novo o schema a partir do modelo:
 
 ```bash
-mysql -u kanban -p -h localhost -P 3306 KanbanDemandas < database/scripts/KanbanDemandas.MySql.idempotent.sql
+dotnet ef dbcontext script --project src/KanbanDemandas.Infrastructure --startup-project src/KanbanDemandas.Infrastructure -o modelo.sql
 ```
 
-Tambem e possivel aplicar via EF Core:
-
-```bash
-dotnet ef database update --project src/KanbanDemandas.Infrastructure --startup-project src/KanbanDemandas.Web --framework net9.0
-```
-
-A aplicacao NAO aplica migrations na inicializacao: rode os scripts acima (ou `dotnet ef database update`) antes de publicar uma versao nova.
-
-Scripts incrementais (na ordem), para bancos que ja existiam:
-
-1. `scripts/2026-09-27_RegrasEtapaEEstorno.sql` — exigencias por etapa, campos automaticos, estorno de vai-e-volta.
-2. `scripts/2026-09-28_MotorAutomacoes.sql` — motor de automacoes (converte as regras antigas para o novo formato).
-3. `scripts/2026-09-28_ParametrizacaoFeriadosAnexos.sql` — parametrizacao pela tela, espera das automacoes, feriados e compactacao de anexos.
-4. `scripts/2026-09-28_PortalGitTeams.sql` — portal de solicitacoes (status publico por lista, comentarios publicos), vinculos com GitHub e mensagens do Teams.
-5. `scripts/2026-09-28_CamposBloqueadosEtapa.sql` — campos nao permitidos por etapa (ex.: Backlog sem desenvolvedor).
+Use a saída para atualizar `KanbanDemandas.SqlServer.sql` (bancos novos), mantendo o formato do arquivo:
+um lote só dentro da transação (sem `GO`), nomes com `[dbo].`, defaults com nome (`DF_Tabela_Coluna`) e
+`SET IDENTITY_INSERT` direto. Para os bancos que já existem, escreva à mão o `ALTER TABLE` correspondente.

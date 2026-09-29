@@ -98,7 +98,7 @@ Validação em navegador contra o MySQL real começou nesta rodada (pelo usuári
 
 O sistema deixou de ser apenas um esqueleto de entidades e passou a ter um fluxo funcional de quadro, cartões, campos configuráveis, colaboração, sprints, automações, dashboard e exportações.
 
-A persistência foi ajustada para **MySQL 8.0+** usando `Pomelo.EntityFrameworkCore.MySql`. A migration inicial e os scripts SQL MySQL foram recriados.
+A persistência usa **SQL Server** (`Microsoft.EntityFrameworkCore.SqlServer`). Em 28/09 as migrations e os scripts MySQL foram removidos: o banco é criado pelo script único `database/KanbanDemandas.SqlServer.sql` (32 tabelas + dados iniciais), validado no LocalDB com o sistema principal e o portal abrindo as telas sem erro. As menções a migrations e a `database/scripts` abaixo são históricas.
 
 O build atual está aprovado:
 
@@ -356,10 +356,9 @@ Arquivos principais:
 dotnet restore KanbanDemandas.slnx
 dotnet build KanbanDemandas.slnx --no-restore
 dotnet test tests/KanbanDemandas.Tests
-dotnet ef migrations list --project src/KanbanDemandas.Infrastructure --startup-project src/KanbanDemandas.Web --framework net9.0
-dotnet ef database update --project src/KanbanDemandas.Infrastructure --startup-project src/KanbanDemandas.Web --framework net9.0
+sqlcmd -S <servidor> -E -b -i database/KanbanDemandas.SqlServer.sql
 ```
 
 ## Observação final
 
-O projeto está tecnicamente compilável e possui uma base funcional ampla, mas ainda não deve ser considerado pronto para produção antes da conexão com um MySQL real, da validação no navegador e da revisão de segurança das credenciais, anexos, e-mails e ausência de autenticação real.
+O projeto está tecnicamente compilável e possui uma base funcional ampla, mas ainda não deve ser considerado pronto para produção antes da conexão com o SQL Server de produção, da validação no navegador e da revisão de segurança das credenciais, anexos, e-mails e ausência de autenticação real.

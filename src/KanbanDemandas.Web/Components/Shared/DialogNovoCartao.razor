@@ -401,7 +401,7 @@
         _templateId = templateId;
         var template = _templates.FirstOrDefault(t => t.Id == templateId);
         if (template is null) return;
-        _titulo = template.TitulopadraO ?? _titulo;
+        _titulo = template.TituloPadrao ?? _titulo;
         _descricao = template.DescricaoPadrao ?? _descricao;
     }
 }

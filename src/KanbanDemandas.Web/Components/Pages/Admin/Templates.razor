@@ -79,7 +79,7 @@
         if (_quadroCartaoId == 0 || string.IsNullOrWhiteSpace(_nomeCartao)) return;
         Db.TemplatesCartao.Add(new TemplateCartao
         {
-            Nome = _nomeCartao.Trim(), TitulopadraO = _tituloPadrao.Trim(), DescricaoPadrao = _descricaoPadrao?.Trim(),
+            Nome = _nomeCartao.Trim(), TituloPadrao = _tituloPadrao.Trim(), DescricaoPadrao = _descricaoPadrao?.Trim(),
             ItensTarefaPadrao = string.IsNullOrWhiteSpace(_itensTarefaPadrao) ? null : _itensTarefaPadrao.Trim(),
             CamposPadrao = string.IsNullOrWhiteSpace(_camposPadrao) ? null : _camposPadrao.Trim(),
             QuadroId = _quadroCartaoId, CriadoPorId = UsuarioProvider.ObterIdUsuarioAtual(), CriadoEm = DateTime.UtcNow

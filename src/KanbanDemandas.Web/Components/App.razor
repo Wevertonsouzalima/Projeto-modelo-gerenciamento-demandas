@@ -8,7 +8,6 @@
     <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
     <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
-    <link rel="stylesheet" href="@Assets["KanbanDemandas.Web.styles.css"]" />
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.png" />
     <HeadOutlet @rendermode="InteractiveServer" />
@@ -16,9 +15,105 @@
 
 <body>
     <Routes @rendermode="InteractiveServer" />
-    <ReconnectModal />
+    <dialog id="components-reconnect-modal" data-nosnippet>
+        <div class="components-reconnect-container">
+            <div class="components-rejoining-animation" aria-hidden="true">
+                <div></div>
+                <div></div>
+            </div>
+            <p class="components-reconnect-first-attempt-visible">
+                Rejoining the server...
+            </p>
+            <p class="components-reconnect-repeated-attempt-visible">
+                Rejoin failed... trying again in <span id="components-seconds-to-next-attempt"></span> seconds.
+            </p>
+            <p class="components-reconnect-failed-visible">
+                Failed to rejoin.<br />Please retry or reload the page.
+            </p>
+            <button id="components-reconnect-button" class="components-reconnect-failed-visible">
+                Retry
+            </button>
+            <p class="components-pause-visible">
+                The session has been paused by the server.
+            </p>
+            <p class="components-resume-failed-visible">
+                Failed to resume the session.<br />Please retry or reload the page.
+            </p>
+            <button id="components-resume-button" class="components-pause-visible components-resume-failed-visible">
+                Resume
+            </button>
+        </div>
+    </dialog>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script>
+        // Modal de reconexão do Blazor.
+        (function () {
+            // Set up event handlers
+            const reconnectModal = document.getElementById("components-reconnect-modal");
+            reconnectModal.addEventListener("components-reconnect-state-changed", handleReconnectStateChanged);
+
+            const retryButton = document.getElementById("components-reconnect-button");
+            retryButton.addEventListener("click", retry);
+
+            const resumeButton = document.getElementById("components-resume-button");
+            resumeButton.addEventListener("click", resume);
+
+            function handleReconnectStateChanged(event) {
+                if (event.detail.state === "show") {
+                    reconnectModal.showModal();
+                } else if (event.detail.state === "hide") {
+                    reconnectModal.close();
+                } else if (event.detail.state === "failed") {
+                    document.addEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
+                } else if (event.detail.state === "rejected") {
+                    location.reload();
+                }
+            }
+
+            async function retry() {
+                document.removeEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
+
+                try {
+                    // Reconnect will asynchronously return:
+                    // - true to mean success
+                    // - false to mean we reached the server, but it rejected the connection (e.g., unknown circuit ID)
+                    // - exception to mean we didn't reach the server (this can be sync or async)
+                    const successful = await Blazor.reconnect();
+                    if (!successful) {
+                        // We have been able to reach the server, but the circuit is no longer available.
+                        // We'll reload the page so the user can continue using the app as quickly as possible.
+                        const resumeSuccessful = await Blazor.resumeCircuit();
+                        if (!resumeSuccessful) {
+                            location.reload();
+                        } else {
+                            reconnectModal.close();
+                        }
+                    }
+                } catch (err) {
+                    // We got an exception, server is currently unavailable
+                    document.addEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
+                }
+            }
+
+            async function resume() {
+                try {
+                    const successful = await Blazor.resumeCircuit();
+                    if (!successful) {
+                        location.reload();
+                    }
+                } catch {
+                    reconnectModal.classList.replace("components-reconnect-paused", "components-reconnect-resume-failed");
+                }
+            }
+
+            async function retryWhenDocumentBecomesVisible() {
+                if (document.visibilityState === "visible") {
+                    await retry();
+                }
+            }
+        })();
+    </script>
     <script>
         // Download de arquivos gerados no servidor (ex.: exportação dos relatórios).
         window.kanbanBaixarArquivo = function (nome, base64, tipo) {

@@ -12,7 +12,7 @@ Recriar o sistema com **as mesmas funcionalidades e conceitos**, mudando apenas:
 
 | Tema | Hoje (este repositório) | Nova versão |
 |---|---|---|
-| Banco | MySQL 8 via `Pomelo.EntityFrameworkCore.MySql` | **SQL Server** via `Microsoft.EntityFrameworkCore.SqlServer` |
+| Banco | **SQL Server** via `Microsoft.EntityFrameworkCore.SqlServer` (já trocado; sem migrations, schema por script) | Mantém |
 | Usuário atual | `FakeUsuarioAtualProvider` + `SessaoUsuario` (seletor provisório no topo) | **Fluxo de login completo da BBICore** (sistema principal e portal) |
 | UI | MudBlazor 8.9 | **Componentes da BBICore** onde existirem; MudBlazor (ou o que já estiver no padrão da BBICore) para o resto |
 | Permissões | Nenhuma | Perfis mínimos (seção 3.4) |
@@ -40,14 +40,16 @@ Nesta ordem:
 ## 2. Mapa do repositório atual
 
 ```
-src/KanbanDemandas.Core/            entidades, enums, interfaces, regras puras (Regras/)
-src/KanbanDemandas.Infrastructure/  DbContext, configurações EF, interceptors, migrations (MySQL), serviços compartilhados
-src/KanbanDemandas.Web/             sistema principal (Blazor Server + MudBlazor)
-src/KanbanDemandas.Portal/          portal de solicitações (Blazor Server + MudBlazor)
-tests/KanbanDemandas.Tests/         xUnit + EF InMemory (89 testes)
-database/scripts/                   scripts MySQL (serão substituídos)
-docs/                               guias
+src/KanbanDemandas.Core/Dominio.cs                   entidades, enums, interfaces, regras puras
+src/KanbanDemandas.Infrastructure/Infraestrutura.cs  DbContext, configurações EF, interceptors, seed, serviços compartilhados
+src/KanbanDemandas.Web/                              sistema principal (Blazor Server + MudBlazor); C# fora das telas em Servicos.cs
+src/KanbanDemandas.Portal/                           portal de solicitações (Blazor Server + MudBlazor); C# fora das telas em Servicos.cs
+tests/KanbanDemandas.Tests/Testes.cs                 xUnit + EF InMemory (89 testes)
+database/KanbanDemandas.SqlServer.sql                criação completa do banco (SQL Server)
+docs/                                                guias
 ```
+
+O código C# foi consolidado em poucos arquivos por projeto (facilita copiar o projeto sem `git clone`). Os namespaces não mudaram, e cada arquivo antigo virou um `#region` com o caminho original: na tabela abaixo, `Core/Regras/ListasQuadro.cs` é o `#region Regras/ListasQuadro.cs` de `Core/Dominio.cs`, `Web/Services/...` fica em `Web/Servicos.cs`, e assim por diante. Telas (`.razor`) continuam um arquivo por componente.
 
 ### 2.1 Onde está cada conceito
 
@@ -131,6 +133,8 @@ Use o modelo da BBICore se houver. **Confirme com o usuário** antes de fechar e
 
 ## 4. Migração MySQL → SQL Server
 
+> **Já feita neste repositório** (28/09): provider trocado, migrations removidas, schema em `database/KanbanDemandas.SqlServer.sql` validado no LocalDB. As configurações de FK já não tinham cascata múltipla. Os itens abaixo ficam como checklist para o que a BBICore mudar no modelo (ex.: `LoginExterno`).
+
 ### 4.1 Pacotes e configuração
 
 - Remova `Pomelo.EntityFrameworkCore.MySql`; adicione `Microsoft.EntityFrameworkCore.SqlServer` 9.x (mesma versão do EF usado).
@@ -149,9 +153,8 @@ Use o modelo da BBICore se houver. **Confirme com o usuário** antes de fechar e
 
 ### 4.3 Migrations e scripts
 
-- **Descarte** as migrations MySQL (`Infrastructure/Data/Migrations`) e gere uma `InitialCreate` para SQL Server com o modelo atual completo (inclui `LoginExterno` e o que a BBICore exigir).
-- Gere `database/scripts/KanbanDemandas.SqlServer.sql` (completo) e `KanbanDemandas.SqlServer.idempotent.sql` (`dotnet ef migrations script --idempotent`). Remova os scripts MySQL e reescreva `database/README.md` (criação do banco/usuário no SQL Server, ordem dos scripts, `dotnet ef database update` opcional).
-- Continue **sem** aplicar migrations na inicialização (`MigrarBancoAsync` existe mas não é chamado — manter assim).
+- Não há migrations: o schema vem do modelo via `dotnet ef dbcontext script` e fica em `database/KanbanDemandas.SqlServer.sql` (ver `database/README.md`). Ao mudar o modelo (ex.: `LoginExterno`), regenere o script e escreva o `ALTER TABLE` para bancos existentes.
+- A aplicação não cria nem altera o banco na inicialização — manter assim.
 - Seed (`SeedData.cs`): revise ids fixos e `HasData`; inclua o usuário de sistema e o quadro de exemplo. Configure o Backlog do exemplo com `CamposFixosBloqueados = Desenvolvedor|Prazo|DataInicio` (35).
 - Connection string: user-secrets em dev (os dois projetos compartilham o `UserSecretsId`), variável de ambiente/cofre em produção; appsettings só com placeholder.
 
